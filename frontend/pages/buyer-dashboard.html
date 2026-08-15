@@ -413,7 +413,29 @@
     const groupCounts = {};
     allOrders.forEach(o => { if (o.checkout_group) groupCounts[o.checkout_group] = (groupCounts[o.checkout_group] || 0) + 1; });
 
-    el.innerHTML = filtered.map(o => `
+    el.innerHTML = filtered.map(o => {
+      const escrowState = (o.escrow_status || o.status || 'pending');
+      const escrowLabel = {
+        pending: 'Pending escrow',
+        held: 'Escrow held',
+        released: 'Escrow released',
+        disputed: 'Dispute open',
+        cancelled: 'Escrow cancelled',
+      }[escrowState] || 'Escrow update';
+
+      const escrowCodeRow = o.escrow_code
+        ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Verification code: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong> ${o.escrow_code_expires_at ? `· expires ${formatDate(o.escrow_code_expires_at)}` : ''}</div>`
+        : '';
+
+      const escrowMessage = escrowState === 'held'
+        ? '<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Funds are securely held until you confirm delivery.</div>'
+        : escrowState === 'released'
+          ? '<div style="font-size:12px;color:#065f46;margin-top:6px;font-weight:600;">✅ Delivery confirmed and seller payout has been released.</div>'
+          : escrowState === 'disputed'
+            ? '<div style="font-size:12px;color:#991b1b;margin-top:6px;font-weight:600;">⚠️ Admin review is active for this order.</div>'
+            : '';
+
+      return `
       <div class="order-card">
         <div class="order-card-top">
           <div class="order-img">
@@ -423,6 +445,7 @@
             <div class="order-title">${o.listing_title}</div>
             <div class="order-meta">
               ${statusBadge(o.status)}
+              <span class="badge badge-surface">${escrowLabel}</span>
               <span style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--accent);text-decoration:underline;text-decoration-style:dotted;" onclick="openUserProfile('${o.seller_id || ''}','${(o.seller_name||'').replace(/'/g,"\\'")}')">
                 ${icons.user} ${o.seller_name}
               </span>
@@ -432,6 +455,8 @@
             ${o.fulfillment === 'delivery' && o.delivery_address
               ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:4px;">${icons.truck} Delivering to ${o.delivery_address.address}${o.delivery_address.campus ? ', ' + o.delivery_address.campus : ''}</div>`
               : (o.meetup_location ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:4px;">${icons.mapPin} Meetup: ${o.meetup_location}</div>` : '')}
+            ${escrowCodeRow}
+            ${escrowMessage}
             ${o.status === 'completing' && o.buyer_marked_complete ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for seller to confirm…</div>` : ''}
             ${o.status === 'completed' && !o.buyer_rating ? `<div style="font-size:12px;color:#059669;margin-top:6px;font-weight:600;">✓ Complete — tap ★ to rate</div>` : ''}
           </div>
@@ -443,13 +468,25 @@
             ${o.status === 'pending' ? `<button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button>` : ''}
             ${(o.status === 'confirmed' || (o.status === 'completing' && !o.buyer_marked_complete))
               ? `<button class="btn btn-primary btn-sm" onclick="markComplete('${o.id}')">✓ Mark ${o.fulfillment === 'delivery' ? 'as received' : 'Complete'}</button>` : ''}
+            ${o.escrow_status === 'held' ? `<button class="btn btn-accent btn-sm" onclick="confirmEscrowDelivery('${o.id}')">Verify delivery code</button>` : ''}
             ${o.status === 'completed' && !o.buyer_rating
               ? `<button class="btn btn-accent btn-sm" onclick="openRatingModal('${o.id}','${(o.seller_name||'').replace(/'/g,"\\'")}')">★ Rate Seller</button>` : ''}
             ${o.buyer_rating ? `<span style="font-size:13px;color:#d69e2e;font-weight:600;">Rated ${'★'.repeat(o.buyer_rating)}</span>` : ''}
           </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
+
+  window.confirmEscrowDelivery = async (id) => {
+    const code = window.prompt('Enter the 6-digit verification code shared by the seller:');
+    if (!code || !String(code).trim()) return;
+    try {
+      await api.post(`/orders/${id}/confirm-delivery`, { code: String(code).trim() });
+      toast('Delivery verified. Escrow released to seller.', 'success');
+      loadOrders();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 
   window.cancelOrder = async (id) => {
     if (!confirm('Cancel this order? The listing will become available again.')) return;

@@ -209,14 +209,13 @@
       <div class="credits-box">
         <div class="credits-top">
           <div>
-            <div class="credits-num" id="credits-num">—</div>
-            <div class="credits-label">listing credits remaining</div>
+            <div class="credits-num" id="credits-num">FREE</div>
+            <div class="credits-label">Listings are free</div>
           </div>
           <div style="color:var(--ink-3)">${icons_placeholder_tag}</div>
         </div>
         <div id="credits-bonus-msg"></div>
-        <div style="font-size:13px;color:var(--ink-3);margin-bottom:12px;">Each listing costs 1 credit. Buy more below:</div>
-        <div class="pricing-tiers" id="pricing-tiers"></div>
+        <div style="font-size:13px;color:var(--ink-3);margin-bottom:12px;">Bixcart charges 3% + ₦300 on each completed sale.</div>
       </div>
       <div class="card" style="padding:16px;">
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin-bottom:10px;">Seller tips</div>
@@ -289,13 +288,9 @@
   const user = auth.getUser();
   if (user?.role !== 'seller') { window.location.href = 'buyer-dashboard.html'; }
 
-  // Show cached credits immediately so the display isn't "—" while loading
-  document.getElementById('credits-num').textContent = user?.listing_credits ?? '—';
-  // Show first-50 bonus badge if user has 6+ credits (waitlist or early seller)
-  if ((user?.listing_credits ?? 0) >= 6) {
-    const bonusEl = document.getElementById('credits-bonus-msg');
-    if (bonusEl) bonusEl.innerHTML = `<div style="font-size:12px;background:#d1fae5;color:#065f46;border-radius:8px;padding:7px 11px;margin-bottom:10px;font-weight:600;">🎁 You're one of our first 50 sellers — enjoy 6 free listing credits!</div>`;
-  }
+  document.getElementById('credits-num').textContent = 'FREE';
+  const bonusEl = document.getElementById('credits-bonus-msg');
+  if (bonusEl) bonusEl.innerHTML = `<div style="font-size:12px;background:#d1fae5;color:#065f46;border-radius:8px;padding:7px 11px;margin-bottom:10px;font-weight:600;">✅ Listings are free. Seller fee is 3% + ₦300 per sale.</div>`;
 
   document.getElementById('greeting').textContent = `Welcome back, ${user?.full_name?.split(' ')[0]}`;
 
@@ -377,84 +372,9 @@
     } catch(e) {}
   }
 
-  // Pricing tiers — prices in kobo for Paystack (₦500, ₦1,350, ₦4,250)
-  const TIERS = [
-    { credits: 1,  price: 50000,  label: '1 listing',   note: 'Single credit' },
-    { credits: 3,  price: 135000, label: '3 listings',  note: 'Save 10%' },
-    { credits: 10, price: 425000, label: '10 listings', note: 'Best value' },
-  ];
-
-  document.getElementById('pricing-tiers').innerHTML = TIERS.map((t,i) => `
-    <div class="pricing-row" onclick="buyCredits(${i})">
-      <div>
-        <div class="tier-label">${t.label}</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span class="tier-save">${t.note}</span>
-        <span class="tier-price">\u20a6${(t.price/100).toLocaleString('en-NG')}</span>
-      </div>
-    </div>`).join('');
-
-  async function buyCredits(i) {
-    const tier = TIERS[i];
-    const currentUser = auth.getUser();
-    if (!currentUser?.email) { toast('Please log in again', 'error'); return; }
-
-    let paystackPublicKey;
-    try {
-      const keyRes = await api.get('/auth/paystack-public-key', false);
-      paystackPublicKey = keyRes.publicKey;
-    } catch(e) {
-      toast('Payment gateway not configured — contact support', 'error');
-      return;
-    }
-
-    async function verifyAndCredit(reference) {
-      toast('Payment successful! Crediting account…', 'success');
-      try {
-        const updated = await api.post('/auth/credits/verify', { reference, credits: tier.credits });
-        auth.save(auth.getToken(), updated);
-        document.getElementById('credits-num').textContent = updated.listing_credits ?? 0;
-        toast(tier.credits + ' credit' + (tier.credits > 1 ? 's' : '') + ' added!', 'success');
-      } catch(e) {
-        toast(e.message || 'Could not credit account — contact support', 'error');
-      }
-    }
-
-    function launchPaystack() {
-      const ref = 'bixcart_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-      const handler = PaystackPop.setup({
-        key: paystackPublicKey,
-        email: currentUser.email,
-        amount: tier.price,
-        currency: 'NGN',
-        ref,
-        metadata: { credits: tier.credits, user_id: currentUser.id || currentUser._id },
-        callback: (response) => {
-          // 'callback' fires reliably on all browsers/devices; 'onSuccess' can silently fail
-          verifyAndCredit(response.reference);
-        },
-        onClose: () => {
-          // Check if payment actually went through when popup closes without callback firing
-          // (handles edge case where popup closes before callback)
-        },
-      });
-      handler.openIframe();
-    }
-
-    if (typeof PaystackPop === 'undefined') {
-      const script = document.createElement('script');
-      script.src = 'https://js.paystack.co/v1/inline.js';
-      script.onload = launchPaystack;
-      script.onerror = () => toast('Could not load payment gateway', 'error');
-      document.head.appendChild(script);
-    } else {
-      launchPaystack();
-    }
-  }
-
-  // Replace icon placeholder
-  document.querySelector('.credits-box').innerHTML = document.querySelector('.credits-box').innerHTML.replace('${icons_placeholder_tag}', icons.tag);
+  // Listings are free; no credit tier purchase is needed.
+  const creditsBox = document.querySelector('.credits-box');
+  if (creditsBox) creditsBox.innerHTML = creditsBox.innerHTML.replace('${icons_placeholder_tag}', icons.tag);
 
   let allListings = [], currentFilter = 'all';
 
@@ -467,7 +387,7 @@
     try {
       const freshUser = await api.get('/auth/me');
       auth.save(auth.getToken(), freshUser);
-      document.getElementById('credits-num').textContent = freshUser.listing_credits ?? 0;
+      document.getElementById('credits-num').textContent = 'FREE';
 
       const listings = await api.get(`/listings/user/${user.id}`);
       allListings = listings;
@@ -537,7 +457,17 @@
     const groupCounts = {};
     allOrders.forEach(o => { if (o.checkout_group) groupCounts[o.checkout_group] = (groupCounts[o.checkout_group] || 0) + 1; });
 
-    el.innerHTML = filtered.map(o => `
+    el.innerHTML = filtered.map(o => {
+      const escrowState = (o.escrow_status || o.status || 'pending');
+      const escrowLabel = {
+        pending: 'Awaiting payment',
+        held: 'Escrow held',
+        released: 'Escrow released',
+        disputed: 'Dispute open',
+        cancelled: 'Escrow cancelled',
+      }[escrowState] || 'Escrow update';
+
+      return `
       <div class="order-card">
         <div class="order-card-top">
           <div class="order-img">${o.listing_images?.[0] ? `<img src="${o.listing_images[0]}" alt="">` : icons.package}</div>
@@ -545,6 +475,7 @@
             <div class="order-title">${o.listing_title}</div>
             <div class="order-meta">
               ${statusBadge(o.status)}
+              <span class="badge badge-surface">${escrowLabel}</span>
               <span style="display:flex;align-items:center;gap:4px;">${icons.user} ${o.buyer_name || 'Buyer'}</span>
               <span>${formatDate(o.created_at)}</span>
             </div>
@@ -553,6 +484,9 @@
               <div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:flex-start;gap:4px;">
                 ${icons.truck} <span>${o.delivery_address.full_name} · ${o.delivery_address.phone}<br>${o.delivery_address.address}${o.delivery_address.campus ? ', ' + o.delivery_address.campus : ''}${o.delivery_address.note ? ` — "${o.delivery_address.note}"` : ''}</span>
               </div>` : ''}
+            ${o.escrow_code ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Verification code: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong></div>` : ''}
+            ${o.escrow_status === 'held' ? `<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Customer payment is secured in escrow until delivery is confirmed.</div>` : ''}
+            ${o.status === 'fulfilled' ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for buyer to verify the delivery code…</div>` : ''}
             ${o.status === 'completing' && o.seller_marked_complete ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for buyer to confirm receipt…</div>` : ''}
           </div>
         </div>
@@ -562,14 +496,23 @@
             ${o.status === 'pending' ? `
               <button class="btn btn-primary btn-sm" onclick="acceptOrder('${o.id}')">${icons.check} Accept</button>
               <button class="btn btn-danger btn-sm" onclick="declineOrder('${o.id}')">Decline</button>` : ''}
-            ${(o.status === 'confirmed' || (o.status === 'completing' && !o.seller_marked_complete))
-              ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${o.id}')">${icons.truck} Mark as delivered</button>` : ''}
+            ${(o.status === 'confirmed' || (o.status === 'completing' && !o.seller_marked_complete) || o.escrow_status === 'held')
+              ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${o.id}')">${icons.truck} Mark as shipped</button>` : ''}
             ${o.status === 'completed' ? `<span style="font-size:13px;color:#059669;font-weight:600;">${icons.check} Delivered</span>` : ''}
             ${o.buyer_rating ? `<span style="font-size:13px;color:#d69e2e;font-weight:600;">Rated ${'★'.repeat(o.buyer_rating)}</span>` : ''}
           </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
+
+  window.markDelivered = async (id) => {
+    try {
+      await api.post(`/orders/${id}/mark-shipped`);
+      toast('Order marked as shipped. Buyer can verify the code to release escrow.', 'success');
+      loadOrders();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 
   window.acceptOrder = async (id) => {
     try {
@@ -584,14 +527,6 @@
     try {
       await api.put(`/orders/${id}/status`, { status: 'cancelled' });
       toast('Order declined', 'success');
-      loadOrders();
-    } catch (e) { toast(e.message, 'error'); }
-  };
-
-  window.markDelivered = async (id) => {
-    try {
-      await api.post(`/orders/${id}/mark-complete`);
-      toast('Marked as delivered', 'success');
       loadOrders();
     } catch (e) { toast(e.message, 'error'); }
   };

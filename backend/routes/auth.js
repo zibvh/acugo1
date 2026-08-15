@@ -288,12 +288,34 @@ router.get('/me', authMiddleware, async (req, res) => {
 // ─── PUT /api/auth/complete-registration ─────────────────────────────────────
 router.put('/complete-registration', authMiddleware, async (req, res) => {
   try {
-    const { full_name, business_name, id_type, id_front_url, id_back_url } = req.body;
+    const {
+      full_name,
+      business_name,
+      hostel_name,
+      room_number,
+      shop_name,
+      shop_number,
+      delivery_info,
+      id_type,
+      id_front_url,
+      id_back_url,
+    } = req.body;
 
     if (!full_name || !id_type || !id_front_url || !id_back_url)
       return res.status(400).json({ error: 'Full name, ID type and both ID photos are required' });
 
-    const update = { full_name, id_type, id_front_url, id_back_url, registration_complete: true };
+    const update = {
+      full_name,
+      id_type,
+      id_front_url,
+      id_back_url,
+      registration_complete: true,
+      hostel_name: hostel_name || '',
+      room_number: room_number || '',
+      shop_name: shop_name || '',
+      shop_number: shop_number || '',
+      delivery_info: delivery_info || '',
+    };
     if (business_name !== undefined) update.business_name = business_name;
 
     const user = await User.findByIdAndUpdate(
@@ -308,9 +330,27 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
 // ─── PUT /api/auth/profile ────────────────────────────────────────────────────
 router.put('/profile', authMiddleware, async (req, res) => {
   try {
-    const { full_name, bio, business_name, university, location, avatar_url, banner_url } = req.body;
+    const {
+      full_name,
+      bio,
+      business_name,
+      hostel_name,
+      room_number,
+      shop_name,
+      shop_number,
+      delivery_info,
+      university,
+      location,
+      avatar_url,
+      banner_url,
+    } = req.body;
     const update = { full_name, bio };
     if (business_name !== undefined) update.business_name = business_name;
+    if (hostel_name !== undefined) update.hostel_name = hostel_name;
+    if (room_number !== undefined) update.room_number = room_number;
+    if (shop_name !== undefined) update.shop_name = shop_name;
+    if (shop_number !== undefined) update.shop_number = shop_number;
+    if (delivery_info !== undefined) update.delivery_info = delivery_info;
     if (university   !== undefined) update.university     = university;
     if (location     !== undefined) update.location       = location;
     if (avatar_url   !== undefined) update.avatar_url     = avatar_url;
@@ -320,6 +360,36 @@ router.put('/profile', authMiddleware, async (req, res) => {
     ).select('-password_hash -email_verify_token -password_reset_token');
     const obj = user.toObject(); obj.id = obj._id;
     res.json(obj);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── POST /api/auth/payout-account ───────────────────────────────────────────
+router.post('/payout-account', authMiddleware, async (req, res) => {
+  try {
+    const { bank_name, bank_code, account_number, account_name } = req.body;
+    if (!bank_name || !bank_code || !account_number || !account_name) {
+      return res.status(400).json({ error: 'Bank name, bank code, account number and account name are required' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.bank_name = bank_name.trim();
+    user.bank_code = bank_code.trim();
+    user.account_number = account_number.trim();
+    user.account_name = account_name.trim();
+    user.payout_status = 'not_configured';
+    user.payout_error = '';
+
+    await user.save();
+    res.json({
+      success: true,
+      payout_status: user.payout_status,
+      bank_name: user.bank_name,
+      bank_code: user.bank_code,
+      account_number: user.account_number,
+      account_name: user.account_name,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -476,7 +546,7 @@ router.get('/seller-count', async (req, res) => {
 router.get('/users/:id/profile', async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
-      .select('full_name avatar_url bio university role rating rating_count business_name created_at account_status')
+      .select('full_name avatar_url bio university role rating rating_count business_name hostel_name room_number shop_name shop_number delivery_info created_at account_status')
       .lean();
     if (!user || user.account_status === 'suspended') return res.status(404).json({ error: 'User not found' });
 

@@ -3,6 +3,9 @@ const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { Order, Listing, User, SavedListing, CartItem } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
+const { notifyUser } = require('../db/push');
+const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
+const { createTransferRecipient, initiateTransfer } = require('../utils/paystack');
 
 // GET /api/orders/stats  — before /:id
 router.get('/stats', authMiddleware, async (req, res) => {
@@ -158,18 +161,32 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     }
 
     const checkout_group = uuidv4();
-    const orders = await Order.insertMany(cartItems.map(c => ({
-      listing_id:        c.listing_id._id,
-      buyer_id:          req.user.id,
-      seller_id:         c.listing_id.seller_id,
-      amount:            c.listing_id.price,
-      checkout_group,
-      fulfillment:       'delivery',
-      delivery_address,
-      payment_method:    'card',
-      payment_status:    'paid',
-      payment_reference,
-    })));
+    const escrowCode = generateVerificationCode();
+    const checkoutOrders = cartItems.map(c => {
+      const amount = Number(c.listing_id.price || 0);
+      const platformFee = Number((amount * 0.03 + 300).toFixed(2));
+      const sellerPayout = Number(Math.max(0, amount - platformFee).toFixed(2));
+      return {
+        listing_id:           c.listing_id._id,
+        buyer_id:             req.user.id,
+        seller_id:            c.listing_id.seller_id,
+        amount,
+        status:               'paid',
+        escrow_status:        'held',
+        escrow_code:          escrowCode,
+        escrow_code_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
+        platform_fee_percent: 3,
+        platform_fee_amount:  platformFee,
+        seller_payout_amount: sellerPayout,
+        checkout_group,
+        fulfillment:          'delivery',
+        delivery_address,
+        payment_method:       'card',
+        payment_status:       'paid',
+        payment_reference,
+      };
+    });
+    const orders = await Order.insertMany(checkoutOrders);
 
     await Listing.updateMany(
       { _id: { $in: cartItems.map(c => c.listing_id._id) } },
@@ -178,11 +195,22 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     await CartItem.deleteMany({ user_id: req.user.id });
     await User.findByIdAndUpdate(req.user.id, { $addToSet: { used_payment_refs: payment_reference } });
 
-    console.log('[checkout] Success. orders:', orders.length, 'group:', checkout_group);
+    for (const order of orders) {
+      const sellerId = String(order.seller_id);
+      await notifyUser(sellerId, {
+        title: 'Payment held in escrow',
+        body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.',
+        type: 'escrow',
+        url: `/pages/messages.html?conv=${order._id}`,
+      }).catch(() => {});
+    }
+
+    console.log('[checkout] Success. orders:', orders.length, 'group:', checkout_group, 'escrow_code:', escrowCode);
     res.json({
       checkout_group,
       order_count: orders.length,
       total: orders.reduce((sum, o) => sum + o.amount, 0),
+      verification_code: escrowCode,
       orders: orders.map(o => ({ ...o.toObject(), id: o._id })),
     });
   } catch (e) {
@@ -253,6 +281,140 @@ router.post('/:id/mark-complete', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/orders/:id/escrow
+router.get('/:id/escrow', authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    const isBuyer = String(order.buyer_id) === String(req.user.id);
+    const isSeller = String(order.seller_id) === String(req.user.id);
+    if (!isBuyer && !isSeller) return res.status(403).json({ error: 'Forbidden' });
+
+    res.json({
+      id: order._id,
+      status: order.status,
+      escrow_status: order.escrow_status,
+      verification_code: order.escrow_code,
+      platform_fee_amount: order.platform_fee_amount,
+      seller_payout_amount: order.seller_payout_amount,
+      released_at: order.released_at,
+      delivered_at: order.delivered_at,
+      expires_at: order.escrow_code_expires_at,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/orders/:id/mark-shipped
+router.post('/:id/mark-shipped', authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (String(order.seller_id) !== String(req.user.id))
+      return res.status(403).json({ error: 'Only the seller can mark this order as shipped' });
+    if (order.escrow_status === 'released' || order.status === 'cancelled')
+      return res.status(400).json({ error: 'This order can no longer be updated' });
+
+    order.status = 'fulfilled';
+    order.delivered_at = new Date();
+    await order.save();
+
+    await notifyUser(String(order.buyer_id), {
+      title: 'Seller has fulfilled your order',
+      body: 'The seller has marked the order as fulfilled. Confirm the verification code to release the escrow.',
+      type: 'escrow',
+      url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+
+    res.json({ success: true, order: { ...order.toObject(), id: order._id } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/orders/:id/confirm-delivery
+router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (String(order.buyer_id) !== String(req.user.id))
+      return res.status(403).json({ error: 'Only the buyer can confirm delivery' });
+    if (!order.escrow_code) return res.status(400).json({ error: 'No escrow verification code is attached to this order' });
+    if (order.escrow_status === 'released')
+      return res.status(409).json({ error: 'Escrow has already been released for this order' });
+    if (order.escrow_status === 'cancelled')
+      return res.status(409).json({ error: 'Escrow was cancelled for this order' });
+    if (!verifyEscrowCode(code, order.escrow_code))
+      return res.status(400).json({ error: 'Verification code is incorrect' });
+
+    const payoutAmount = Number(order.seller_payout_amount || calculatePayout(order.amount, order.platform_fee_percent || 3, 300));
+    const platformFee = Number(order.platform_fee_amount || (order.amount - payoutAmount));
+
+    order.status = 'completed';
+    order.escrow_status = 'released';
+    order.released_at = new Date();
+    order.buyer_marked_complete = true;
+    order.seller_marked_complete = true;
+    order.platform_fee_amount = platformFee;
+    order.seller_payout_amount = payoutAmount;
+    order.payout_status = 'pending';
+    await order.save();
+
+    await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
+
+    const sellerUser = await User.findById(order.seller_id);
+    if (process.env.PAYSTACK_SECRET_KEY && sellerUser?.bank_code && sellerUser?.account_number && sellerUser?.bank_name) {
+      try {
+        if (!sellerUser.payout_recipient_code) {
+          const recipient = await createTransferRecipient({
+            name: sellerUser.account_name || sellerUser.full_name,
+            account_number: sellerUser.account_number,
+            bank_code: sellerUser.bank_code,
+          });
+          sellerUser.payout_recipient_code = recipient.recipient_code;
+          sellerUser.payout_status = 'ready';
+          await sellerUser.save();
+        }
+
+        const transfer = await initiateTransfer({
+          amount: payoutAmount,
+          recipient: sellerUser.payout_recipient_code,
+          reason: `Bixcart payout for order ${order._id}`,
+        });
+
+        order.payout_status = 'sent';
+        order.payout_reference = transfer.reference || transfer.id || null;
+        await order.save();
+      } catch (payErr) {
+        sellerUser.payout_status = 'failed';
+        sellerUser.payout_error = payErr.message;
+        await sellerUser.save();
+
+        order.payout_status = 'failed';
+        order.payout_error = payErr.message;
+        await order.save();
+      }
+    } else {
+      sellerUser && (sellerUser.payout_status = 'not_configured');
+      if (sellerUser) await sellerUser.save();
+    }
+
+    await notifyUser(String(order.seller_id), {
+      title: 'Escrow released',
+      body: `Your payout of ₦${payoutAmount.toLocaleString('en-NG')} has been released after successful verification.`,
+      type: 'payout',
+      url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+
+    res.json({
+      success: true,
+      escrow_status: 'released',
+      payout_amount: payoutAmount,
+      platform_fee_amount: platformFee,
+      payout_status: order.payout_status,
+      order: { ...order.toObject(), id: order._id },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/orders/:id/resolve — buyer or seller marks deal as completed or cancelled from chat bubble
 router.post('/:id/resolve', authMiddleware, async (req, res) => {
   try {
@@ -271,10 +433,13 @@ router.post('/:id/resolve', authMiddleware, async (req, res) => {
     if (order.status === 'completed' || order.status === 'cancelled')
       return res.status(400).json({ error: `Order already ${order.status}` });
 
-    const update = { status: outcome };
+    const update = { status: outcome, escrow_status: outcome === 'completed' ? 'released' : 'cancelled' };
     if (outcome === 'completed') {
       update.buyer_marked_complete  = true;
       update.seller_marked_complete = true;
+      update.released_at = new Date();
+      update.platform_fee_amount = order.platform_fee_amount || Number((order.amount * 0.1).toFixed(2));
+      update.seller_payout_amount = Number((order.amount - (update.platform_fee_amount || 0)).toFixed(2));
       await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
     } else {
       await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'active' } });

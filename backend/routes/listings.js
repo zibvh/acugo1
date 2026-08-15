@@ -189,6 +189,11 @@ router.get('/:id', optionalAuth, async (req, res) => {
       seller_verified:     s.is_verified,
       seller_joined:       s.created_at,
       seller_university:  s.university,
+      seller_hostel:       s.hostel_name,
+      seller_room:         s.room_number,
+      seller_shop:         s.shop_name,
+      seller_shop_number:  s.shop_number,
+      seller_delivery_info: s.delivery_info,
       campus:              s.university,
       is_saved,
       seller_reviews:      seller_reviews.map(r => ({
@@ -208,7 +213,6 @@ router.post('/', authMiddleware, async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.role !== 'seller') return res.status(403).json({ error: 'Only sellers can create listings' });
-    if (user.listing_credits < 1) return res.status(403).json({ error: 'No listing credits. Please purchase more.' });
 
     const { title, description, price, original_price, category, condition, images } = req.body;
     if (!title || !description || !price || !category || !condition)
@@ -225,8 +229,7 @@ router.post('/', authMiddleware, async (req, res) => {
       images: Array.isArray(images) ? images.slice(0, 5) : [],
     });
 
-    // Deduct one credit
-    await User.findByIdAndUpdate(req.user.id, { $inc: { listing_credits: -1 } });
+    // Listings are free; no listing credit deduction.
 
     // ── AI moderation (non-blocking) ─────────────────────────────────────────
     setImmediate(async () => {

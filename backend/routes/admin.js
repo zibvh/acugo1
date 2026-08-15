@@ -486,6 +486,90 @@ router.post('/conversations/:reportId/resolve', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/admin/escrow
+router.get('/escrow', async (req, res) => {
+  try {
+    const orders = await Order.find({
+      $or: [
+        { escrow_status: 'held' },
+        { payout_status: { $in: ['pending', 'queued', 'sent', 'failed'] } },
+        { dispute_status: { $in: ['open', 'resolved'] } },
+      ],
+    })
+      .populate('buyer_id', 'full_name email')
+      .populate('seller_id', 'full_name email')
+      .populate('listing_id', 'title price')
+      .sort({ created_at: -1 })
+      .lean();
+
+    res.json({
+      orders: orders.map(o => ({
+        ...o,
+        id: o._id,
+        buyer_name: o.buyer_id?.full_name,
+        seller_name: o.seller_id?.full_name,
+        listing_title: o.listing_id?.title,
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/admin/escrow/:id/release
+router.post('/escrow/:id/release', async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.escrow_status === 'released') {
+      return res.status(400).json({ error: 'Escrow has already been released' });
+    }
+
+    const payoutAmount = Number(order.seller_payout_amount || order.amount);
+    order.escrow_status = 'released';
+    order.status = 'completed';
+    order.released_at = new Date();
+    order.dispute_reason = reason || '';
+    order.dispute_status = 'resolved';
+    order.payout_status = 'queued';
+    await order.save();
+
+    await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
+    res.json({ success: true, payout_amount: payoutAmount, order_id: order._id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/admin/escrow/:id/dispute
+router.post('/escrow/:id/dispute', async (req, res) => {
+  try {
+    const { reason } = req.body;
+    if (!reason?.trim()) return res.status(400).json({ error: 'Reason is required' });
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    order.dispute_status = 'open';
+    order.dispute_reason = reason.trim();
+    order.escrow_status = 'disputed';
+    order.status = 'disputed';
+    await order.save();
+
+    await notifyUser(String(order.buyer_id), {
+      title: 'Order dispute opened',
+      body: reason.trim(),
+      type: 'dispute',
+      url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+
+    await notifyUser(String(order.seller_id), {
+      title: 'Order dispute opened',
+      body: reason.trim(),
+      type: 'dispute',
+      url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/admin/conversations/:reportId/notify — send notification message to one user
 router.post('/conversations/:reportId/notify', async (req, res) => {
   try {

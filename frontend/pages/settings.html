@@ -88,6 +88,32 @@
       </div>
     </div>
 
+    <div class="settings-grid-2" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label class="form-label">Hostel name</label>
+        <input class="form-input" id="s-hostel" type="text" placeholder="e.g. Providence Hostel">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Room number</label>
+        <input class="form-input" id="s-room" type="text" placeholder="e.g. B204">
+      </div>
+    </div>
+    <div class="settings-grid-2" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label class="form-label">Shop name</label>
+        <input class="form-input" id="s-shop" type="text" placeholder="e.g. Chidi's Tech Corner">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Shop number</label>
+        <input class="form-input" id="s-shop-number" type="text" placeholder="e.g. Shop 12">
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:20px;">
+      <label class="form-label">Delivery info</label>
+      <textarea class="form-textarea" id="s-delivery-info" placeholder="Tell buyers where and how delivery works, e.g. meet at the school gate or drop in your hostel after 5pm."></textarea>
+    </div>
+
     <div class="form-group" style="margin-bottom:20px;">
       <label class="form-label">Bio</label>
       <textarea class="form-textarea" id="s-bio" placeholder="Tell other students about yourself…"></textarea>
@@ -144,6 +170,11 @@
       document.getElementById('s-email').value = u.email || '';
       document.getElementById('s-university').value = u.university || '';
       document.getElementById('s-location').value = u.location || '';
+      document.getElementById('s-hostel').value = u.hostel_name || '';
+      document.getElementById('s-room').value = u.room_number || '';
+      document.getElementById('s-shop').value = u.shop_name || '';
+      document.getElementById('s-shop-number').value = u.shop_number || '';
+      document.getElementById('s-delivery-info').value = u.delivery_info || '';
       document.getElementById('s-bio').value = u.bio || '';
 
       const avatarEl = document.getElementById('set-avatar');
@@ -201,6 +232,11 @@
         full_name: document.getElementById('s-name').value,
         university: document.getElementById('s-university').value,
         location: document.getElementById('s-location').value,
+        hostel_name: document.getElementById('s-hostel').value,
+        room_number: document.getElementById('s-room').value,
+        shop_name: document.getElementById('s-shop').value,
+        shop_number: document.getElementById('s-shop-number').value,
+        delivery_info: document.getElementById('s-delivery-info').value,
         bio: document.getElementById('s-bio').value,
       });
       auth.save(auth.getToken(), updated);

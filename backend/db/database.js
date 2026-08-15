@@ -19,6 +19,13 @@ const userSchema = new mongoose.Schema({
   rating_count:    { type: Number, default: 0 },
   is_verified:     { type: Boolean, default: false },
   listing_credits:  { type: Number, default: 1 },
+  bank_name:        { type: String, default: '' },
+  bank_code:        { type: String, default: '' },
+  account_number:   { type: String, default: '' },
+  account_name:     { type: String, default: '' },
+  payout_recipient_code: { type: String, default: null },
+  payout_status:    { type: String, default: 'not_configured', enum: ['not_configured','ready','pending','failed'] },
+  payout_error:     { type: String, default: '' },
   admin_messages:   { type: [{
     title:           { type: String, default: '' },
     content:         String,
@@ -31,8 +38,13 @@ const userSchema = new mongoose.Schema({
   used_payment_refs: { type: [String], default: [] },
   // Registration profile (filled after signup)
   registration_complete: { type: Boolean, default: false },
-  // Seller-specific
+  // Seller-specific public info for pickup and delivery
   business_name:   { type: String, default: '' },
+  hostel_name:     { type: String, default: '' },
+  room_number:     { type: String, default: '' },
+  shop_name:       { type: String, default: '' },
+  shop_number:     { type: String, default: '' },
+  delivery_info:   { type: String, default: '' },
   // ID verification docs (stored as Cloudinary URLs, admin reviews)
   id_type:         { type: String, default: '' }, // 'school_id' | 'nin' | 'national_id' | 'drivers_license'
   id_front_url:    { type: String, default: null },
@@ -146,7 +158,15 @@ const orderSchema = new mongoose.Schema({
   buyer_id:               { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   seller_id:              { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   amount:                 { type: Number, required: true },
-  status:                 { type: String, default: 'pending', enum: ['pending','confirmed','completing','completed','cancelled'] },
+  status:                 { type: String, default: 'pending', enum: ['pending','paid','confirmed','completing','fulfilled','completed','cancelled','disputed'] },
+  escrow_status:          { type: String, default: 'pending', enum: ['pending','held','released','cancelled','disputed'] },
+  escrow_code:            { type: String, default: null },
+  escrow_code_expires_at: { type: Date, default: null },
+  platform_fee_percent:   { type: Number, default: 3 },
+  platform_fee_amount:    { type: Number, default: 0 },
+  seller_payout_amount:   { type: Number, default: 0 },
+  released_at:            { type: Date, default: null },
+  delivered_at:           { type: Date, default: null },
   meetup_location:        { type: String, default: null },
   meetup_time:            { type: String, default: null },
   buyer_marked_complete:  { type: Boolean, default: false },
@@ -164,6 +184,11 @@ const orderSchema = new mongoose.Schema({
   payment_method:         { type: String, enum: ['card'], default: 'card' },
   payment_status:         { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
   payment_reference:      { type: String, default: null },
+  payout_status:          { type: String, default: 'pending', enum: ['pending','queued','sent','failed','refunded'] },
+  payout_reference:       { type: String, default: null },
+  payout_error:           { type: String, default: '' },
+  dispute_reason:         { type: String, default: '' },
+  dispute_status:         { type: String, default: 'none', enum: ['none','open','resolved'] },
 }, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
 
 orderSchema.index({ buyer_id: 1 });

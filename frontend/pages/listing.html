@@ -204,6 +204,17 @@
     const user = auth.getUser();
     const isSeller = user?.id === l.seller_id;
     const discount = l.original_price ? Math.round((1 - l.price / l.original_price) * 100) : 0;
+    const sameHostel = !!(user?.hostel_name && l.seller_hostel && String(user.hostel_name).toLowerCase() === String(l.seller_hostel).toLowerCase());
+    const deliveryInfoText = l.seller_delivery_info || '';
+    const deliveryBox = document.getElementById('delivery-info-box');
+    if (deliveryBox) {
+      if (deliveryInfoText) {
+        deliveryBox.style.display = 'block';
+        document.getElementById('delivery-info-text').textContent = deliveryInfoText;
+      } else {
+        deliveryBox.style.display = 'none';
+      }
+    }
 
     document.title = `${l.title} — Bixcart`;
 
@@ -217,6 +228,7 @@
 
     const condClass = { 'New': 'green', 'Like New': 'green', 'Good': 'amber', 'Fair': 'amber' }[l.condition] || 'surface';
 
+    const sameHostelLabel = sameHostel ? 'Arrange hostel pickup' : 'Chat about delivery';
     const ctaButtons = isSeller ? `
       <a href="sell.html?edit=${l.id}" class="btn btn-ghost w-full" style="display:flex;">${icons.edit} Edit listing</a>
     ` : (l.status !== 'active' ? `
@@ -224,7 +236,7 @@
     ` : `
       <button class="btn btn-accent btn-lg w-full" id="add-cart-btn" onclick="addToCartFromListing('${l.id}')">${icons.shoppingBag} Add to cart</button>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-surface w-full" id="contact-btn" onclick="openMsgModal()">${icons.messageCircle} Contact seller</button>
+        <button class="btn btn-surface w-full" id="contact-btn" onclick="openMsgModal()">${icons.messageCircle} ${sameHostelLabel}</button>
         <button class="btn btn-ghost w-full" id="offer-btn" onclick="openOfferModal()">${icons.tag} Make an offer</button>
       </div>
     `);
@@ -288,6 +300,11 @@
                 </div>
               </div>
               ${l.seller_bio ? `<p style="font-size:14px;color:var(--ink-2);line-height:1.6;padding-top:12px;border-top:1.5px solid var(--border);">${l.seller_bio}</p>` : ''}
+              <div style="margin-top:12px;padding-top:12px;border-top:1.5px solid var(--border);display:flex;flex-direction:column;gap:8px;">
+                ${l.seller_hostel ? `<div style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:6px;">${icons.mapPin} Hostel: <strong style="color:var(--ink);">${l.seller_hostel}</strong>${l.seller_room ? `, Room ${l.seller_room}` : ''}</div>` : ''}
+                ${l.seller_shop ? `<div style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:6px;">${icons.store} Shop: <strong style="color:var(--ink);">${l.seller_shop}</strong>${l.seller_shop_number ? `, No. ${l.seller_shop_number}` : ''}</div>` : ''}
+                ${l.seller_delivery_info ? `<div style="font-size:12px;color:var(--ink-3);display:flex;align-items:flex-start;gap:6px;">${icons.truck} Delivery info: <span style="color:var(--ink);">${l.seller_delivery_info}</span></div>` : ''}
+              </div>
               <div style="font-size:12px;color:var(--ink-3);margin-top:10px;display:flex;align-items:center;gap:4px;">${icons.mapPin} Member since ${new Date(l.seller_joined).toLocaleDateString('en-NG',{month:'long',year:'numeric'})}</div>
             </div>
           </div>
@@ -329,6 +346,10 @@
             <div class="sticky-card-body">
               <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;" id="cta-buttons">
                 ${ctaButtons}
+              </div>
+
+              <div id="delivery-info-box" style="display:none; background:var(--bg); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:12px 14px; font-size:12px; color:var(--ink-2); line-height:1.6; margin-bottom:12px;">
+                <strong style="color:var(--ink);">Delivery info:</strong> <span id="delivery-info-text"></span>
               </div>
 
               <button class="btn btn-surface w-full" id="save-listing-btn" onclick="handleSave()" style="display:flex;">
@@ -403,8 +424,12 @@
 
   function openMsgModal() {
     if (!auth.requireAuth()) return;
+    const me = auth.getUser();
+    const sameHostel = !!(me?.hostel_name && listingData?.seller_hostel && String(me.hostel_name).toLowerCase() === String(listingData.seller_hostel).toLowerCase());
     document.getElementById('msg-listing-info').innerHTML = `<strong>${listingData?.title}</strong> · ${formatPrice(listingData?.price)}`;
-    document.getElementById('msg-input').value = `Hi! I'm interested in your listing "${listingData?.title}". Is it still available?`;
+    document.getElementById('msg-input').value = sameHostel
+      ? `Hi! I stay in ${me.hostel_name}. Can I come collect this item from your hostel${listingData?.seller_room ? ' in room ' + listingData.seller_room : ''}?`
+      : `Hi! I'm interested in this item. Can we chat about delivery and the best place to meet or hand it over?`;
     openModal('msg-modal');
   }
   window.openMsgModal = openMsgModal;

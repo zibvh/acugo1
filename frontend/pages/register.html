@@ -215,6 +215,30 @@
         <input class="form-input" type="text" id="reg-business" placeholder="e.g. Chidi's Tech Corner">
         <div style="font-size:12px;color:var(--ink-3);margin-top:5px;">Displayed on your listings instead of your full name, if set.</div>
       </div>
+      <div class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px;">
+        <div class="form-group">
+          <label class="form-label">Hostel name</label>
+          <input class="form-input" type="text" id="reg-hostel" placeholder="e.g. Providence Hostel">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Room number</label>
+          <input class="form-input" type="text" id="reg-room" placeholder="e.g. B204">
+        </div>
+      </div>
+      <div class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+        <div class="form-group">
+          <label class="form-label">Shop name</label>
+          <input class="form-input" type="text" id="reg-shop" placeholder="e.g. Chidi's Tech Corner">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Shop number</label>
+          <input class="form-input" type="text" id="reg-shop-number" placeholder="e.g. Shop 12">
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:16px;">
+        <label class="form-label">Delivery info</label>
+        <textarea class="form-textarea" id="reg-delivery-info" placeholder="e.g. I can hand off in Hall 1, or meet at the school gate after 5pm." style="min-height:90px;"></textarea>
+      </div>
     </div>
 
     <div class="reg-actions">
@@ -521,6 +545,11 @@
   async function submitRegistration() {
     const name = document.getElementById('reg-fullname').value.trim();
     const business = document.getElementById('reg-business')?.value.trim() || '';
+    const hostel = document.getElementById('reg-hostel')?.value.trim() || '';
+    const room = document.getElementById('reg-room')?.value.trim() || '';
+    const shop = document.getElementById('reg-shop')?.value.trim() || '';
+    const shopNumber = document.getElementById('reg-shop-number')?.value.trim() || '';
+    const deliveryInfo = document.getElementById('reg-delivery-info')?.value.trim() || '';
 
     if (!name) { toast('Please enter your full name', 'error'); return; }
     if (!selectedIdType) { toast('Please select your ID type', 'error'); return; }
@@ -534,6 +563,11 @@
       const updated = await api.put('/auth/complete-registration', {
         full_name: name,
         business_name: business,
+        hostel_name: hostel,
+        room_number: room,
+        shop_name: shop,
+        shop_number: shopNumber,
+        delivery_info: deliveryInfo,
         id_type: selectedIdType,
         id_front_url: frontUrl,
         id_back_url: backUrl,

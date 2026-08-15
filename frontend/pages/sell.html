@@ -282,34 +282,16 @@
 
   const editId = getParam('edit');
 
-  // ── Always fetch fresh user so listing_credits is current ────────────────
-  // Reading from auth.getUser() (localStorage) is stale — credits are only
-  // updated in localStorage when the user stays on the dashboard during payment.
-  // We fetch /auth/me on every page load to get the real live value.
-  (async function checkCredits() {
-    if (editId) return; // editing an existing listing never costs a credit
-    try {
-      const freshUser = await api.get('/auth/me');
-      auth.save(auth.getToken(), freshUser); // keep localStorage in sync
-
-      if ((freshUser.listing_credits ?? 0) < 1) {
-        // Block the form — no credits
-        document.getElementById('submit-btn').disabled = true;
-        document.getElementById('submit-label').textContent = 'No listing credits';
-        const notice = document.createElement('div');
-        notice.style.cssText = 'background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-lg);padding:20px;margin-bottom:24px;text-align:center;';
-        notice.innerHTML = `
-          <div style="font-size:28px;margin-bottom:8px">🎟️</div>
-          <div style="font-weight:700;font-size:16px;margin-bottom:6px">You have 0 listing credits</div>
-          <div style="font-size:14px;color:var(--ink-3);margin-bottom:16px">Purchase credits to publish this listing.</div>
-          <a href="seller-dashboard.html#credits" class="btn btn-accent">Buy credits →</a>`;
-        const formArea = document.querySelector('.sell-layout') || document.querySelector('form') || document.querySelector('.form-card');
-        if (formArea) formArea.closest('.page, main, .container') ? formArea.closest('.page, main, .container').prepend(notice) : formArea.before(notice);
-      }
-    } catch(e) {
-      // Network error — don't block the form; backend will enforce credits anyway
-      console.warn('Could not verify listing credits:', e.message);
-    }
+  // Listings are free now — no credit check required.
+  (function showFreeListingNotice() {
+    if (editId) return;
+    const notice = document.createElement('div');
+    notice.style.cssText = 'background:linear-gradient(135deg,#edf7ed,#f3faf5);border:1.5px solid #a7f3d0;border-radius:var(--radius-lg);padding:16px 18px;margin-bottom:18px;';
+    notice.innerHTML = `
+      <div style="font-size:14px;font-weight:700;color:#065f46;">Listings are free on Bixcart.</div>
+      <div style="font-size:12px;color:#166534;line-height:1.5;margin-top:4px;">Bixcart keeps a 3% + ₦300 fee only when an item sells.</div>`;
+    const formArea = document.querySelector('.sell-layout') || document.querySelector('form') || document.querySelector('.form-card');
+    if (formArea) formArea.closest('.page, main, .container') ? formArea.closest('.page, main, .container').prepend(notice) : formArea.before(notice);
   })();
   if (editId) {
     document.getElementById('page-title').textContent = 'Edit listing';

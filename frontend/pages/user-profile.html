@@ -364,17 +364,25 @@
       }
     }
 
-    // Business name for seller
-    const businessBadge = isSeller && u.business_name
-      ? `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:5px;margin-top:6px;">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          ${escHtml(u.business_name)}
-        </div>`
-      : '';
+    let pickupInfo = '';
+    if (isSeller) {
+      if (u.hostel_name && u.room_number) {
+        pickupInfo += `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:5px;margin-top:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 21v-6h4v6"/></svg> Hostel: ${escHtml(u.hostel_name)} • Room ${escHtml(u.room_number)}</div>`;
+      } else if (u.hostel_name) {
+        pickupInfo += `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:5px;margin-top:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 21v-6h4v6"/></svg> Hostel: ${escHtml(u.hostel_name)}</div>`;
+      }
+      if (u.shop_name && u.shop_number) {
+        pickupInfo += `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:5px;margin-top:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Shop: ${escHtml(u.shop_name)} • ${escHtml(u.shop_number)}</div>`;
+      } else if (u.shop_name) {
+        pickupInfo += `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:center;gap:5px;margin-top:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Shop: ${escHtml(u.shop_name)}</div>`;
+      }
+      if (u.delivery_info) {
+        pickupInfo += `<div style="font-size:13px;color:var(--ink-2);display:flex;align-items:flex-start;gap:5px;margin-top:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h11v10H3z"/><path d="M14 10h3l4 4v3h-7"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="17.5" cy="18.5" r="1.5"/></svg> Delivery: ${escHtml(u.delivery_info)}</div>`;
+      }
+    }
 
-    // Inject business name into name block
-    if (businessBadge) {
-      document.getElementById('profile-name-block').insertAdjacentHTML('beforeend', businessBadge);
+    if (pickupInfo) {
+      document.getElementById('profile-name-block').insertAdjacentHTML('beforeend', pickupInfo);
     }
 
     // Compose message CTA (only for logged-in users viewing someone else)
