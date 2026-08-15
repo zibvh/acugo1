@@ -2,10 +2,12 @@
   "name": "campusmarket",
   "version": "1.0.0",
   "description": "Campus Market — Student peer-to-peer marketplace",
+  "main": "server.js",
   "scripts": {
-    "start": "cd backend && node server.js",
-    "dev": "cd backend && node server.js",
-    "install-deps": "cd backend && npm install"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "install-deps": "cd backend && npm install",
+    "postinstall": "npm run install-deps"
   },
   "engines": {
     "node": ">=18.0.0"
