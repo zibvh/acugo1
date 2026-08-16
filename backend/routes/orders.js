@@ -425,6 +425,14 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
     await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
 
     const sellerUser = await User.findById(order.seller_id);
+    if (sellerUser && order.status === 'completed') {
+      const completedSales = Number(sellerUser.successful_sales_count || 0) + 1;
+      const commissionInfo = getSellerCommissionInfo(completedSales);
+      sellerUser.successful_sales_count = completedSales;
+      sellerUser.commission_tier = commissionInfo.level;
+      sellerUser.commission_percent = commissionInfo.commission_percent;
+      await sellerUser.save();
+    }
     if (process.env.PAYSTACK_SECRET_KEY && sellerUser?.bank_code && sellerUser?.account_number && sellerUser?.bank_name) {
       try {
         if (!sellerUser.payout_recipient_code) {
