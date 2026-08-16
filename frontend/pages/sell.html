@@ -92,12 +92,34 @@
   .cond-option.selected { border-color: var(--ink); background: var(--ink); color: white; }
   .cond-option-name { font-weight: 700; display: block; margin-bottom: 2px; }
   .cond-option-desc { font-size: 11px; opacity: .7; display: block; }
+  .window-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .window-option {
+    padding: 10px 12px; border: 1.5px solid var(--border);
+    border-radius: var(--radius-md); cursor: pointer;
+    font-size: 13px; font-weight: 500; color: var(--ink-2);
+    transition: all .15s; background: var(--surface); text-align: center;
+    font-family: var(--font-body);
+  }
+  .window-option:hover { border-color: var(--ink-2); }
+  .window-option.selected { border-color: var(--ink); background: var(--ink); color: white; }
+  .window-option-name { font-weight: 700; display: block; }
   .tips-card { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius-lg); padding: 20px; margin-top: 16px; }
   .tip-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; font-size: 13px; color: var(--ink-2); line-height: 1.5; }
   .tip-item:last-child { margin-bottom: 0; }
   .tip-icon { color: var(--green); flex-shrink: 0; margin-top: 1px; }
 
   @media(max-width: 900px) {
+    .sell-layout { grid-template-columns: 1fr; }
+    .preview-card { position: static; }
+    .window-options { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media(max-width: 600px) {
+    .form-card { padding: 20px; }
+    .form-grid-2 { grid-template-columns: 1fr; }
+    .img-previews { grid-template-columns: repeat(3, 1fr); }
+    .cond-options { grid-template-columns: 1fr; }
+    .window-options { grid-template-columns: repeat(2, 1fr); }
+  }
     .sell-layout { grid-template-columns: 1fr; }
     .preview-card { position: static; }
     .form-grid-2 { grid-template-columns: 1fr; }
@@ -216,6 +238,30 @@
           </div>
         </div>
 
+        <!-- Delivery Window -->
+        <div class="form-card">
+          <div class="form-section-title"><span id="delivery-icon"></span> Delivery timeframe <span style="color:var(--red);">*</span></div>
+          <div class="form-hint" style="margin-bottom:14px;">How long after the buyer pays do they have to wait for delivery?</div>
+          <div class="window-options">
+            <button type="button" class="window-option" data-window="6h">
+              <span class="window-option-name">6 hours</span>
+            </button>
+            <button type="button" class="window-option" data-window="12h">
+              <span class="window-option-name">12 hours</span>
+            </button>
+            <button type="button" class="window-option" data-window="1d">
+              <span class="window-option-name">1 day</span>
+            </button>
+            <button type="button" class="window-option" data-window="3d">
+              <span class="window-option-name">3 days</span>
+            </button>
+            <button type="button" class="window-option" data-window="7d">
+              <span class="window-option-name">7 days</span>
+            </button>
+          </div>
+          <input type="hidden" id="f-delivery-window" value="1d">
+        </div>
+
         <!-- Submit -->
         <div style="display:flex;gap:12px;justify-content:flex-end;padding-bottom:40px;">
           <a href="seller-dashboard.html" class="btn btn-ghost btn-lg">Cancel</a>
@@ -274,6 +320,7 @@
   document.getElementById('info-icon').innerHTML = icons.tag;
   document.getElementById('cond-icon').innerHTML = icons.star;
   document.getElementById('price-icon').innerHTML = icons.dollarSign;
+  document.getElementById('delivery-icon').innerHTML = icons.clock;
   document.getElementById('submit-icon').innerHTML = icons.plus;
   document.getElementById('preview-img-placeholder').innerHTML = icons.package;
   document.getElementById('tips-icon').innerHTML = icons.star;
@@ -328,7 +375,9 @@
       document.getElementById('f-price').value = l.price;
       document.getElementById('f-orig-price').value = l.original_price || '';
       document.getElementById('f-condition').value = l.condition;
+      document.getElementById('f-delivery-window').value = l.delivery_window || '1d';
       document.querySelectorAll('.cond-option').forEach(b => b.classList.toggle('selected', b.dataset.cond === l.condition));
+      document.querySelectorAll('.window-option').forEach(b => b.classList.toggle('selected', b.dataset.window === (l.delivery_window || '1d')));
       updatePreview();
     } catch(e) { toast('Failed to load listing', 'error'); }
   }
@@ -374,6 +423,15 @@
       document.querySelectorAll('.cond-option').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
       document.getElementById('f-condition').value = btn.dataset.cond;
+    });
+  });
+
+  // Delivery window selection
+  document.querySelectorAll('.window-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.window-option').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      document.getElementById('f-delivery-window').value = btn.dataset.window;
     });
   });
 
@@ -476,13 +534,15 @@
     const category = document.getElementById('f-category').value;
     
     const condition = document.getElementById('f-condition').value;
+    const deliveryWindow = document.getElementById('f-delivery-window').value;
     const price = parseFloat(document.getElementById('f-price').value);
     const origPrice = parseFloat(document.getElementById('f-orig-price').value) || null;
 
     if (!title) { toast('Please enter a title', 'error'); document.getElementById('f-title').focus(); return; }
     if (!desc) { toast('Please enter a description', 'error'); return; }
     if (!category) { toast('Please select a category', 'error'); return; }
-        if (!condition) { toast('Please select the item condition', 'error'); return; }
+    if (!condition) { toast('Please select the item condition', 'error'); return; }
+    if (!deliveryWindow) { toast('Please select a delivery timeframe', 'error'); return; }
     if (!price || price <= 0) { toast('Please enter a valid price', 'error'); return; }
 
     const btn = document.getElementById('submit-btn');
@@ -491,7 +551,7 @@
     document.getElementById('submit-label').textContent = editId ? 'Saving…' : 'Publishing…';
 
     try {
-      const payload = { title, description: desc, price, original_price: origPrice, category, condition, images: uploadedImages };
+      const payload = { title, description: desc, price, original_price: origPrice, category, condition, delivery_window: deliveryWindow, images: uploadedImages };
       let result;
       if (editId) {
         result = await api.put(`/listings/${editId}`, payload);

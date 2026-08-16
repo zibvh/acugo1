@@ -6,6 +6,7 @@ const { authMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
 const { createTransferRecipient, initiateTransfer } = require('../utils/paystack');
+const { sendOrderSellerAlertEmail, sendOrderRefundEmail } = require('../utils/email');
 
 // GET /api/orders/stats  — before /:id
 router.get('/stats', authMiddleware, async (req, res) => {
@@ -166,6 +167,8 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       const amount = Number(c.listing_id.price || 0);
       const platformFee = Number((amount * 0.03 + 300).toFixed(2));
       const sellerPayout = Number(Math.max(0, amount - platformFee).toFixed(2));
+      const listingWindow = c.listing_id.delivery_window || '1d';
+      const deliveryMinutes = { '6h': 6 * 60, '12h': 12 * 60, '1d': 24 * 60, '3d': 72 * 60, '7d': 7 * 24 * 60 }[listingWindow] || 24 * 60;
       return {
         listing_id:           c.listing_id._id,
         buyer_id:             req.user.id,
@@ -175,6 +178,8 @@ router.post('/checkout', authMiddleware, async (req, res) => {
         escrow_status:        'held',
         escrow_code:          escrowCode,
         escrow_code_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
+        response_deadline_at: new Date(Date.now() + 1000 * 60 * 60 * 6),
+        delivery_deadline_at: new Date(Date.now() + 1000 * 60 * deliveryMinutes),
         platform_fee_percent: 3,
         platform_fee_amount:  platformFee,
         seller_payout_amount: sellerPayout,
@@ -197,12 +202,22 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 
     for (const order of orders) {
       const sellerId = String(order.seller_id);
+      const seller = await User.findById(sellerId).select('email full_name').lean();
+      const listing = await Listing.findById(order.listing_id).select('title delivery_window').lean();
       await notifyUser(sellerId, {
         title: 'Payment held in escrow',
         body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.',
         type: 'escrow',
         url: `/pages/messages.html?conv=${order._id}`,
       }).catch(() => {});
+      if (seller?.email) {
+        await sendOrderSellerAlertEmail(seller.email, {
+          buyerName: req.user.full_name || 'A buyer',
+          listingTitle: listing?.title || 'your item',
+          orderId: String(order._id),
+          deliveryWindow: listing?.delivery_window || '1d',
+        }).catch(() => {});
+      }
     }
 
     console.log('[checkout] Success. orders:', orders.length, 'group:', checkout_group, 'escrow_code:', escrowCode);
@@ -304,6 +319,36 @@ router.get('/:id/escrow', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/orders/:id/accept
+router.post('/:id/accept', authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (String(order.seller_id) !== String(req.user.id))
+      return res.status(403).json({ error: 'Only the seller can accept this order' });
+    if (order.status === 'cancelled' || order.escrow_status === 'released')
+      return res.status(400).json({ error: 'This order can no longer be accepted' });
+    if (new Date(order.response_deadline_at || Date.now()) < new Date())
+      return res.status(400).json({ error: 'This order expired because the seller did not respond in time' });
+
+    const listing = await Listing.findById(order.listing_id).select('delivery_window').lean();
+    const deliveryMinutes = { '6h': 6 * 60, '12h': 12 * 60, '1d': 24 * 60, '3d': 72 * 60, '7d': 7 * 24 * 60 }[listing?.delivery_window || '1d'] || 24 * 60;
+    order.status = 'confirmed';
+    order.seller_accepted_at = new Date();
+    order.delivery_deadline_at = new Date(Date.now() + 1000 * 60 * deliveryMinutes);
+    await order.save();
+
+    await notifyUser(String(order.buyer_id), {
+      title: 'Seller accepted your order',
+      body: 'The seller accepted your item request. Delivery or pickup must happen within the listed timeframe.',
+      type: 'escrow',
+      url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+
+    res.json({ success: true, order: { ...order.toObject(), id: order._id } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/orders/:id/mark-shipped
 router.post('/:id/mark-shipped', authMiddleware, async (req, res) => {
   try {
@@ -313,6 +358,9 @@ router.post('/:id/mark-shipped', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Only the seller can mark this order as shipped' });
     if (order.escrow_status === 'released' || order.status === 'cancelled')
       return res.status(400).json({ error: 'This order can no longer be updated' });
+    if (order.delivery_deadline_at && new Date(order.delivery_deadline_at) < new Date()) {
+      return res.status(400).json({ error: 'This order missed the delivery deadline and will be refunded automatically' });
+    }
 
     order.status = 'fulfilled';
     order.delivered_at = new Date();
@@ -342,6 +390,9 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
       return res.status(409).json({ error: 'Escrow has already been released for this order' });
     if (order.escrow_status === 'cancelled')
       return res.status(409).json({ error: 'Escrow was cancelled for this order' });
+    if (order.delivery_deadline_at && new Date(order.delivery_deadline_at) < new Date()) {
+      return res.status(400).json({ error: 'This order missed its delivery deadline and must be refunded automatically' });
+    }
     if (!verifyEscrowCode(code, order.escrow_code))
       return res.status(400).json({ error: 'Verification code is incorrect' });
 
@@ -443,6 +494,15 @@ router.post('/:id/resolve', authMiddleware, async (req, res) => {
       await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
     } else {
       await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'active' } });
+      const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
+      const listing = await Listing.findById(order.listing_id).select('title').lean();
+      if (buyer?.email) {
+        await sendOrderRefundEmail(buyer.email, {
+          buyerName: buyer.full_name || 'buyer',
+          listingTitle: listing?.title || 'your item',
+          reason: 'Seller did not respond within the required 6-hour window.',
+        }).catch(() => {});
+      }
     }
 
     const updated = await Order.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
@@ -471,15 +531,16 @@ router.post('/:id/rate', authMiddleware, async (req, res) => {
       $set: { buyer_rating: rating, buyer_review: (review || '').trim(), buyer_rated_at: new Date() },
     });
 
-    // Recalculate seller's rating
     const seller = await User.findById(order.seller_id);
     const newCount = (seller.rating_count || 0) + 1;
     const newRating = (((seller.rating || 0) * (seller.rating_count || 0)) + rating) / newCount;
+    const profileDelta = rating >= 4 ? 5 : rating === 3 ? 0 : -8;
+    const nextHealth = Math.min(100, Math.max(0, (seller.profile_health || 100) + profileDelta));
     await User.findByIdAndUpdate(order.seller_id, {
-      $set: { rating: Math.round(newRating * 10) / 10, rating_count: newCount },
+      $set: { rating: Math.round(newRating * 10) / 10, rating_count: newCount, profile_health: nextHealth },
     });
 
-    res.json({ success: true });
+    res.json({ success: true, profile_health: nextHealth });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

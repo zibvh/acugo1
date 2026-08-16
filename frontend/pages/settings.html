@@ -91,7 +91,9 @@
     <div class="settings-grid-2" style="margin-bottom:16px;">
       <div class="form-group">
         <label class="form-label">Hostel name</label>
-        <input class="form-input" id="s-hostel" type="text" placeholder="e.g. Providence Hostel">
+        <select class="form-select" id="s-hostel">
+          <option value="">Select hostel</option>
+        </select>
       </div>
       <div class="form-group">
         <label class="form-label">Room number</label>
@@ -162,6 +164,25 @@
 
   const user = auth.getUser();
 
+  async function loadHostelOptions(selected = '') {
+    try {
+      const data = await api.get('/auth/hostels');
+      const select = document.getElementById('s-hostel');
+      if (!select) return;
+      const options = ['<option value="">Select hostel</option>']
+        .concat((data.hostels || []).map(h => `<option value="${h.name}" ${selected === h.name ? 'selected' : ''}>${h.name}</option>`))
+        .join('');
+      select.innerHTML = options;
+      if (selected && !Array.from(select.options).some(o => o.value === selected)) {
+        select.innerHTML += `<option value="${selected}" selected>${selected}</option>`;
+      }
+    } catch (e) {
+      console.warn('Failed to load hostel list:', e.message);
+      const select = document.getElementById('s-hostel');
+      if (select) select.innerHTML = '<option value="">Select hostel</option><option value="Other">Other</option>';
+    }
+  }
+
   async function loadSettings() {
     try {
       const u = await api.get('/auth/me');
@@ -170,7 +191,7 @@
       document.getElementById('s-email').value = u.email || '';
       document.getElementById('s-university').value = u.university || 'Ajayi Crowther University';
       document.getElementById('s-location').value = u.location || 'Ajegunle, Oyo, Oyo State';
-      document.getElementById('s-hostel').value = u.hostel_name || '';
+      await loadHostelOptions(u.hostel_name || '');
       document.getElementById('s-room').value = u.room_number || '';
       document.getElementById('s-shop').value = u.shop_name || '';
       document.getElementById('s-shop-number').value = u.shop_number || '';

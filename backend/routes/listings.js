@@ -214,9 +214,12 @@ router.post('/', authMiddleware, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.role !== 'seller') return res.status(403).json({ error: 'Only sellers can create listings' });
 
-    const { title, description, price, original_price, category, condition, images } = req.body;
+    const { title, description, price, original_price, category, condition, images, delivery_window } = req.body;
     if (!title || !description || !price || !category || !condition)
       return res.status(400).json({ error: 'Missing required fields' });
+    const allowedWindows = ['6h','12h','1d','3d','7d'];
+    if (delivery_window && !allowedWindows.includes(delivery_window))
+      return res.status(400).json({ error: 'Invalid delivery window' });
 
     if (Array.isArray(images) && images.length > 5)
       return res.status(400).json({ error: 'Maximum 5 photos allowed per listing' });
@@ -226,6 +229,7 @@ router.post('/', authMiddleware, async (req, res) => {
       price: parseFloat(price),
       original_price: original_price ? parseFloat(original_price) : null,
       category, condition,
+      delivery_window: delivery_window || '1d',
       images: Array.isArray(images) ? images.slice(0, 5) : [],
     });
 
@@ -272,13 +276,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (ageMs > EDIT_LOCK_MS)
       return res.status(403).json({ error: 'Listings can only be edited within 90 minutes of being created.' });
 
-    const { title, description, price, original_price, category, condition, status, images } = req.body;
+    const { title, description, price, original_price, category, condition, status, images, delivery_window } = req.body;
+    const allowedWindows = ['6h','12h','1d','3d','7d'];
+    if (delivery_window && !allowedWindows.includes(delivery_window))
+      return res.status(400).json({ error: 'Invalid delivery window' });
     if (Array.isArray(images) && images.length > 5)
       return res.status(400).json({ error: 'Maximum 5 photos allowed per listing' });
 
     const updated = await Listing.findByIdAndUpdate(
       req.params.id,
-      { $set: { title, description, price: parseFloat(price), original_price: original_price ? parseFloat(original_price) : null, category, condition, ...(status ? { status } : {}), ...(Array.isArray(images) ? { images: images.slice(0, 5) } : {}) } },
+      { $set: { title, description, price: parseFloat(price), original_price: original_price ? parseFloat(original_price) : null, category, condition, ...(status ? { status } : {}), ...(delivery_window ? { delivery_window } : {}), ...(Array.isArray(images) ? { images: images.slice(0, 5) } : {}) } },
       { new: true }
     ).lean();
     res.json({ ...updated, id: updated._id });

@@ -81,6 +81,12 @@
   .breadcrumb-sep { opacity: .4; display: flex; }
   .msg-modal-input { min-height: 90px; }
   .view-count { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ink-3); }
+  .delivery-choice-box { background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 12px; }
+  .delivery-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .delivery-mode { width: 100%; padding: 12px 10px; border-radius: var(--radius-md); border: 1.5px solid var(--border); background: var(--surface); text-align: left; color: var(--ink-2); transition: all .15s; cursor: pointer; }
+  .delivery-mode:hover { border-color: var(--ink); }
+  .delivery-mode.active { background: var(--ink); color: white; border-color: var(--ink); }
+  .delivery-mode small { display: block; margin-top: 4px; opacity: .8; }
 
   @media(max-width:900px) {
     .listing-layout { grid-template-columns: 1fr; }
@@ -221,6 +227,8 @@
         deliveryBox.style.display = 'none';
       }
     }
+    const selectedDeliveryMode = sameHostel ? 'pickup' : 'delivery';
+    window.selectedDeliveryMode = selectedDeliveryMode;
 
     document.title = `${l.title} — Bixcart`;
 
@@ -235,6 +243,21 @@
     const condClass = { 'New': 'green', 'Like New': 'green', 'Good': 'amber', 'Fair': 'amber' }[l.condition] || 'surface';
 
     const sameHostelLabel = sameHostel ? 'Arrange hostel pickup' : 'Chat about delivery';
+    const deliveryChoiceHTML = !isSeller && l.status === 'active' ? `
+      <div class="delivery-choice-box">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);">Delivery option</div>
+        <div class="delivery-mode-grid">
+          <button type="button" class="delivery-mode ${sameHostel ? 'active' : ''}" data-mode="pickup" onclick="setDeliveryMode('pickup')" ${sameHostel ? '' : 'disabled'}>
+            <strong>Hostel pickup</strong>
+            <small>${sameHostel ? `Meet in ${l.seller_hostel}` : 'Only available when you are in the same hostel'}</small>
+          </button>
+          <button type="button" class="delivery-mode ${!sameHostel ? 'active' : ''}" data-mode="delivery" onclick="setDeliveryMode('delivery')">
+            <strong>Delivery chat</strong>
+            <small>Agree where and how to meet</small>
+          </button>
+        </div>
+      </div>
+    ` : '';
     const ctaButtons = isSeller ? `
       <a href="sell.html?edit=${l.id}" class="btn btn-ghost w-full" style="display:flex;">${icons.edit} Edit listing</a>
     ` : (l.status !== 'active' ? `
@@ -348,9 +371,11 @@
                 ${statusBadge(l.status)}
                 <span style="font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:3px;">${icons.mapPin} ${l.campus}</span>
               </div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:8px;">Delivery window: <strong style="color:var(--ink);">${windowLabel(l.delivery_window || '1d')}</strong></div>
             </div>
             <div class="sticky-card-body">
               <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;" id="cta-buttons">
+                ${deliveryChoiceHTML}
                 ${ctaButtons}
               </div>
 
@@ -428,12 +453,31 @@
   }
   window.addToCartFromListing = addToCartFromListing;
 
+  function setDeliveryMode(mode) {
+    const validModes = ['pickup', 'delivery'];
+    if (!validModes.includes(mode)) return;
+    const me = auth.getUser();
+    const sameHostel = !!(me?.hostel_name && listingData?.seller_hostel && String(me.hostel_name).toLowerCase() === String(listingData.seller_hostel).toLowerCase());
+    if (mode === 'pickup' && !sameHostel) return;
+    window.selectedDeliveryMode = mode;
+    document.querySelectorAll('.delivery-mode').forEach(btn => {
+      const active = btn.dataset.mode === mode;
+      btn.classList.toggle('active', active);
+    });
+    const button = document.getElementById('contact-btn');
+    if (button) {
+      button.innerHTML = `${icons.messageCircle} ${mode === 'pickup' ? 'Arrange hostel pickup' : 'Chat about delivery'}`;
+    }
+  }
+  window.setDeliveryMode = setDeliveryMode;
+
   function openMsgModal() {
     if (!auth.requireAuth()) return;
     const me = auth.getUser();
     const sameHostel = !!(me?.hostel_name && listingData?.seller_hostel && String(me.hostel_name).toLowerCase() === String(listingData.seller_hostel).toLowerCase());
+    const mode = window.selectedDeliveryMode || (sameHostel ? 'pickup' : 'delivery');
     document.getElementById('msg-listing-info').innerHTML = `<strong>${listingData?.title}</strong> · ${formatPrice(listingData?.price)}`;
-    document.getElementById('msg-input').value = sameHostel
+    document.getElementById('msg-input').value = mode === 'pickup'
       ? `Hi! I stay in ${me.hostel_name}. Can I come collect this item from your hostel${listingData?.seller_room ? ' in room ' + listingData.seller_room : ''}?`
       : `Hi! I'm interested in this item. Can we chat about delivery and the best place to meet or hand it over?`;
     openModal('msg-modal');

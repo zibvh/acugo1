@@ -1,6 +1,6 @@
 const express = require('express');
 const router  = express.Router();
-const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast } = require('../db/database');
+const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel } = require('../db/database');
 const { adminMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 
@@ -188,6 +188,63 @@ router.delete('/users/:id', async (req, res) => {
     // Delete user
     await User.findByIdAndDelete(user._id);
 
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── HOSTELS ──────────────────────────────────────────────────────────────────
+// Admin-managed hostel catalog. Users choose from this list; room numbers remain free text.
+router.get('/hostels', async (req, res) => {
+  try {
+    const hostels = await Hostel.find().sort({ sort_order: 1, name: 1 }).lean();
+    res.json({ hostels: hostels.map(h => ({ ...h, id: h._id })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/hostels', async (req, res) => {
+  try {
+    const { name, campus, is_active, sort_order } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Hostel name is required' });
+
+    const hostel = await Hostel.create({
+      name: String(name).trim(),
+      campus: campus || 'Ajayi Crowther University',
+      is_active: is_active !== false,
+      sort_order: Number.isFinite(Number(sort_order)) ? Number(sort_order) : 0,
+    });
+
+    res.status(201).json({ ...hostel.toObject(), id: hostel._id });
+  } catch (e) {
+    if (e.code === 11000) return res.status(409).json({ error: 'This hostel already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/hostels/:id', async (req, res) => {
+  try {
+    const { name, campus, is_active, sort_order } = req.body;
+    const update = {};
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'Hostel name is required' });
+      update.name = String(name).trim();
+    }
+    if (campus !== undefined) update.campus = campus || 'Ajayi Crowther University';
+    if (is_active !== undefined) update.is_active = !!is_active;
+    if (sort_order !== undefined) update.sort_order = Number(sort_order) || 0;
+
+    const hostel = await Hostel.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
+    if (!hostel) return res.status(404).json({ error: 'Hostel not found' });
+    res.json({ ...hostel.toObject(), id: hostel._id });
+  } catch (e) {
+    if (e.code === 11000) return res.status(409).json({ error: 'This hostel already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/hostels/:id', async (req, res) => {
+  try {
+    const hostel = await Hostel.findByIdAndDelete(req.params.id);
+    if (!hostel) return res.status(404).json({ error: 'Hostel not found' });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

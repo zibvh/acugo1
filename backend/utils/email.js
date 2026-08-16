@@ -103,4 +103,45 @@ async function sendPasswordResetEmail(to, token) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, verifyTransport };
+async function sendOrderSellerAlertEmail(to, { buyerName, listingTitle, orderId, deliveryWindow }) {
+  await sendMail({
+    to,
+    subject: `New sale alert for ${listingTitle}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fafafa;border-radius:12px;">
+        <h2 style="color:#1a1a1a;margin-bottom:8px;">New order received</h2>
+        <p style="color:#555;line-height:1.6;">
+          <strong>${buyerName}</strong> paid for <strong>${listingTitle}</strong> on Bixcart.
+          Please accept or decline the order within <strong>6 hours</strong>.
+        </p>
+        <p style="color:#555;line-height:1.6;">If you accept it, the item must be delivered within the selected window: <strong>${deliveryWindow}</strong>.</p>
+        <div style="margin:24px 0;padding:14px 18px;border:1px solid #eee;border-radius:10px;background:white;">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#666;">Order ID</div>
+          <div style="font-weight:600;color:#1a1a1a;font-size:14px;">${orderId}</div>
+        </div>
+      </div>`,
+  });
+}
+
+async function sendOrderRefundEmail(to, { buyerName, listingTitle, reason }) {
+  await sendMail({
+    to,
+    subject: `Payment refunded for ${listingTitle}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fafafa;border-radius:12px;">
+        <h2 style="color:#1a1a1a;margin-bottom:8px;">Refund processed</h2>
+        <p style="color:#555;line-height:1.6;">
+          Hi ${buyerName}, your payment for <strong>${listingTitle}</strong> has been refunded because the seller did not respond in time or the delivery window was missed.
+        </p>
+        <p style="color:#555;line-height:1.6;">Reason: <strong>${reason}</strong></p>
+      </div>`,
+  });
+}
+
+module.exports = {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  sendOrderSellerAlertEmail,
+  sendOrderRefundEmail,
+  verifyTransport,
+};

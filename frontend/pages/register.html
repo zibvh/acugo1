@@ -218,7 +218,9 @@
       <div class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px;">
         <div class="form-group">
           <label class="form-label">Hostel name</label>
-          <input class="form-input" type="text" id="reg-hostel" placeholder="e.g. Providence Hostel">
+          <select class="form-select" id="reg-hostel">
+            <option value="">Select hostel</option>
+          </select>
         </div>
         <div class="form-group">
           <label class="form-label">Room number</label>
@@ -410,6 +412,7 @@
 
   // Pre-fill name
   document.getElementById('reg-fullname').value = user?.full_name || '';
+  loadHostelOptions();
 
   let selectedIdType = '';
   let frontUrl = '', backUrl = '';
@@ -539,6 +542,19 @@
       if (iconEl) iconEl.innerHTML = icons.image;
       if (contentEl) contentEl.style.opacity = '1';
       input.value = '';
+    }
+  }
+
+  async function loadHostelOptions() {
+    try {
+      const data = await api.get('/auth/hostels');
+      const select = document.getElementById('reg-hostel');
+      if (!select) return;
+      select.innerHTML = '<option value="">Select hostel</option>' + (data.hostels || []).map(h => `<option value="${h.name}">${h.name}</option>`).join('');
+    } catch (e) {
+      console.warn('Failed to load hostels:', e.message);
+      const select = document.getElementById('reg-hostel');
+      if (select) select.innerHTML = '<option value="">Select hostel</option><option value="Other">Other</option>';
     }
   }
 

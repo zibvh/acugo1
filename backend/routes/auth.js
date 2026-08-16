@@ -4,7 +4,7 @@ const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
 const crypto     = require('crypto');
 const rateLimit  = require('express-rate-limit');
-const { User, Order, Listing, Waitlist } = require('../db/database');
+const { User, Order, Listing, Waitlist, Hostel } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
 
@@ -282,6 +282,13 @@ router.get('/me', authMiddleware, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const obj = user.toObject(); obj.id = obj._id;
     res.json(obj);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/hostels', async (req, res) => {
+  try {
+    const hostels = await Hostel.find({ is_active: { $ne: false } }).sort({ sort_order: 1, name: 1 }).lean();
+    res.json({ hostels: hostels.map(h => ({ ...h, id: h._id })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

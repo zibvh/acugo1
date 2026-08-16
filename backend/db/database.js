@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema({
   location:        { type: String, default: 'Ajegunle, Oyo, Oyo State' },
   rating:          { type: Number, default: 0 },
   rating_count:    { type: Number, default: 0 },
+  profile_health:   { type: Number, default: 100, min: 0, max: 100 },
   is_verified:     { type: Boolean, default: false },
   listing_credits:  { type: Number, default: 1 },
   bank_name:        { type: String, default: '' },
@@ -69,6 +70,7 @@ const listingSchema = new mongoose.Schema({
   category:        { type: String, required: true },
   condition:       { type: String, required: true, enum: ['New','Like New','Good','Fair'] },
   images:          { type: [String], default: [] },
+  delivery_window:  { type: String, default: '1d', enum: ['6h','12h','1d','3d','7d'] },
   status:          { type: String, default: 'active', enum: ['active','pending','sold','deleted','flagged'] },
   views:           { type: Number, default: 0 },
   saves:           { type: Number, default: 0 },
@@ -87,6 +89,15 @@ listingSchema.index({ title: 'text', description: 'text' });
 const waitlistSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
 }, { timestamps: { createdAt: 'created_at', updatedAt: false } });
+
+const hostelSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  campus: { type: String, default: 'Ajayi Crowther University' },
+  is_active: { type: Boolean, default: true },
+  sort_order: { type: Number, default: 0 },
+}, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
+
+hostelSchema.index({ name: 1, campus: 1 }, { unique: true });
 
 const savedListingSchema = new mongoose.Schema({
   user_id:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -174,6 +185,12 @@ const orderSchema = new mongoose.Schema({
   buyer_rating:           { type: Number, default: null, min: 1, max: 5 },
   buyer_review:           { type: String, default: '' },
   buyer_rated_at:         { type: Date, default: null },
+  seller_rating:          { type: Number, default: null, min: 1, max: 5 },
+  seller_review:          { type: String, default: '' },
+  seller_rated_at:        { type: Date, default: null },
+  seller_accepted_at:     { type: Date, default: null },
+  delivery_deadline_at:   { type: Date, default: null },
+  response_deadline_at:   { type: Date, default: null },
   // Cart checkout fields. A cart with items from several sellers splits into one
   // Order per seller at checkout — checkout_group ties those siblings back together
   // as "one purchase" for the buyer's order history.
@@ -211,6 +228,7 @@ const broadcastSchema = new mongoose.Schema({
 const User               = mongoose.model('User',               userSchema);
 const Listing            = mongoose.model('Listing',            listingSchema);
 const Waitlist           = mongoose.model('Waitlist',           waitlistSchema);
+const Hostel             = mongoose.model('Hostel',             hostelSchema);
 const SavedListing       = mongoose.model('SavedListing',       savedListingSchema);
 const CartItem           = mongoose.model('CartItem',           cartItemSchema);
 const Conversation       = mongoose.model('Conversation',       conversationSchema);
@@ -226,4 +244,4 @@ async function connectDb() {
   console.log('  MongoDB connected:', mongoose.connection.host);
 }
 
-module.exports = { connectDb, User, Listing, Waitlist, SavedListing, CartItem, Conversation, Message, ConversationReport, Order, Broadcast };
+module.exports = { connectDb, User, Listing, Waitlist, Hostel, SavedListing, CartItem, Conversation, Message, ConversationReport, Order, Broadcast };

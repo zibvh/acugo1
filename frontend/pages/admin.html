@@ -700,6 +700,10 @@ body {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
       Broadcast
     </button>
+    <button class="admin-nav-item" data-tab="hostels">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 11h6M9 15h6M9 19h6"/></svg>
+      Hostels
+    </button>
     <button class="admin-nav-item" data-tab="messages">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       Reports
@@ -800,7 +804,7 @@ api.patch = (path, body) => api.request('PATCH', path, body, true);
 function adminLogout() { adminAuth.clear(); window.location.replace('admin-login.html'); }
 
 // ── Tab routing ─────────────────────────────────────────────────────────────
-const TABS = { overview: 'Overview', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
+const TABS = { overview: 'Overview', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
 let currentTab = 'overview';
 
 document.querySelectorAll('.admin-nav-item[data-tab]').forEach(btn => {
@@ -841,6 +845,7 @@ function switchTab(tab) {
   if (tab === 'users')     renderUsers();
   if (tab === 'listings')  renderListings();
   if (tab === 'broadcast') renderBroadcast();
+  if (tab === 'hostels')   renderHostels();
   if (tab === 'messages')  renderMessages();
   if (tab === 'escrow')    renderEscrow();
   if (tab === 'flagged')   renderFlagged();
@@ -997,6 +1002,100 @@ async function renderOverview() {
       btn.addEventListener('click', () => switchTab(btn.dataset.goto));
     });
   } catch(e) { c.innerHTML = `<div class="admin-empty">Failed to load stats: ${e.message}</div>`; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HOSTELS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderHostels() {
+  const c = document.getElementById('admin-content');
+  c.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+      <div>
+        <div class="section-kicker" style="margin-bottom:6px;">Campus settings</div>
+        <h2 style="font-size:28px;letter-spacing:-.5px;">Hostels</h2>
+      </div>
+      <button class="btn btn-primary" id="add-hostel-btn">+ Add hostel</button>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr><th>Name</th><th>Campus</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="hostels-tbody"><tr><td colspan="4" style="padding:24px;text-align:center;color:var(--ink-3);">Loading hostels…</td></tr></tbody>
+      </table>
+    </div>`;
+
+  const addBtn = document.getElementById('add-hostel-btn');
+  addBtn.addEventListener('click', () => addHostel());
+
+  try {
+    const data = await api.get('/admin/hostels');
+    const rows = data.hostels || [];
+    const tbody = document.getElementById('hostels-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:24px;text-align:center;color:var(--ink-3);">No hostels yet. Add the first hostel.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = rows.map(h => `
+      <tr>
+        <td>${escHtml(h.name)}</td>
+        <td>${escHtml(h.campus || 'Ajayi Crowther University')}</td>
+        <td><span class="badge ${h.is_active === false ? 'badge-surface' : 'badge-green'}">${h.is_active === false ? 'Hidden' : 'Active'}</span></td>
+        <td>
+          <div class="action-btns">
+            <button class="action-btn view" data-hostel-action="edit" data-id="${h.id}">Edit</button>
+            <button class="action-btn kick" data-hostel-action="delete" data-id="${h.id}">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+
+    c.querySelectorAll('[data-hostel-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const action = btn.dataset.hostelAction;
+        if (action === 'edit') return editHostel(id);
+        if (action === 'delete') return deleteHostel(id);
+      });
+    });
+  } catch (e) {
+    c.innerHTML = `<div class="admin-empty">Failed to load hostels: ${e.message}</div>`;
+  }
+}
+
+async function addHostel() {
+  const name = window.prompt('Hostel name:', '');
+  if (!name || !name.trim()) return;
+  try {
+    await api.post('/admin/hostels', { name: name.trim(), campus: 'Ajayi Crowther University', is_active: true });
+    toast('Hostel added', 'success');
+    renderHostels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function editHostel(id) {
+  const current = await api.get('/admin/hostels');
+  const hostel = (current.hostels || []).find(h => String(h.id) === String(id));
+  if (!hostel) return;
+  const nextName = window.prompt('Edit hostel name:', hostel.name || '');
+  if (!nextName || !nextName.trim()) return;
+  try {
+    await api.patch(`/admin/hostels/${id}`, { name: nextName.trim() });
+    toast('Hostel updated', 'success');
+    renderHostels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteHostel(id) {
+  const ok = window.confirm('Delete this hostel from the approved list?');
+  if (!ok) return;
+  try {
+    await api.delete(`/admin/hostels/${id}`);
+    toast('Hostel removed', 'success');
+    renderHostels();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
