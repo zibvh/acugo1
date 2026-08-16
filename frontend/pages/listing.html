@@ -57,7 +57,7 @@
   }
   .sticky-card-header { padding: 24px 24px 0; }
   .sticky-card-body { padding: 20px 24px 24px; }
-  .price-display { font-family: var(--font-display); font-size: 42px; line-height: 1; color: var(--ink); }
+  .price-display { font-family: var(--font-display); font-size: clamp(30px, 5vw, 42px); line-height: 1; color: var(--ink); }
   .price-orig { font-family: var(--font-body); font-size: 16px; color: var(--ink-3); text-decoration: line-through; margin-left: 8px; }
   .seller-card {
     display: flex; align-items: center; gap: 12px; padding: 14px;
@@ -86,6 +86,12 @@
     .listing-layout { grid-template-columns: 1fr; }
     .sticky-card { position: static; }
     .related-grid { grid-template-columns: repeat(2,1fr); }
+  }
+  @media(max-width:560px) {
+    .img-main { height: 300px; }
+    .sticky-card-header, .sticky-card-body { padding-left: 16px; padding-right: 16px; }
+    .detail-row { flex-direction: column; gap: 4px; }
+    .related-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>

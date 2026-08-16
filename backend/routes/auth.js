@@ -344,6 +344,8 @@ router.put('/profile', authMiddleware, async (req, res) => {
       avatar_url,
       banner_url,
     } = req.body;
+    const fixedUniversity = 'Ajayi Crowther University';
+    const fixedLocation = 'Ajegunle, Oyo, Oyo State';
     const update = { full_name, bio };
     if (business_name !== undefined) update.business_name = business_name;
     if (hostel_name !== undefined) update.hostel_name = hostel_name;
@@ -351,8 +353,8 @@ router.put('/profile', authMiddleware, async (req, res) => {
     if (shop_name !== undefined) update.shop_name = shop_name;
     if (shop_number !== undefined) update.shop_number = shop_number;
     if (delivery_info !== undefined) update.delivery_info = delivery_info;
-    if (university   !== undefined) update.university     = university;
-    if (location     !== undefined) update.location       = location;
+    update.university = fixedUniversity;
+    update.location = (typeof location === 'string' && location.trim()) ? location.trim() : fixedLocation;
     if (avatar_url   !== undefined) update.avatar_url     = avatar_url;
     if (banner_url   !== undefined) update.banner_url     = banner_url;
     const user = await User.findByIdAndUpdate(

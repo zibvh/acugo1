@@ -79,11 +79,11 @@
     <div class="settings-grid-2" style="margin-bottom:16px;">
       <div class="form-group">
         <label class="form-label">University</label>
-        <input class="form-input" id="s-university" type="text" placeholder="e.g. Ajayi Crowther University, Oyo, Nigeria">
+        <input class="form-input" id="s-university" type="text" value="Ajayi Crowther University" readonly aria-readonly="true" tabindex="-1">
       </div>
       <div class="form-group">
         <label class="form-label">Location</label>
-        <input class="form-input" id="s-location" type="text" placeholder="e.g. Ojoo, Oyo, Nigeria">
+        <input class="form-input" id="s-location" type="text" placeholder="Ajegunle, Oyo, Oyo State">
         <span class="form-hint">Used to help buyers/sellers find you for meetups.</span>
       </div>
     </div>
@@ -168,8 +168,8 @@
       auth.save(auth.getToken(), u);
       document.getElementById('s-name').value = u.full_name || '';
       document.getElementById('s-email').value = u.email || '';
-      document.getElementById('s-university').value = u.university || '';
-      document.getElementById('s-location').value = u.location || '';
+      document.getElementById('s-university').value = u.university || 'Ajayi Crowther University';
+      document.getElementById('s-location').value = u.location || 'Ajegunle, Oyo, Oyo State';
       document.getElementById('s-hostel').value = u.hostel_name || '';
       document.getElementById('s-room').value = u.room_number || '';
       document.getElementById('s-shop').value = u.shop_name || '';
@@ -228,10 +228,11 @@
     const btn = document.getElementById('save-profile-btn');
     btn.disabled = true; btn.innerHTML = icons.loader + ' Saving…';
     try {
+      const nextLocation = (document.getElementById('s-location').value || '').trim() || 'Ajegunle, Oyo, Oyo State';
       const updated = await api.put('/auth/profile', {
         full_name: document.getElementById('s-name').value,
-        university: document.getElementById('s-university').value,
-        location: document.getElementById('s-location').value,
+        university: 'Ajayi Crowther University',
+        location: nextLocation,
         hostel_name: document.getElementById('s-hostel').value,
         room_number: document.getElementById('s-room').value,
         shop_name: document.getElementById('s-shop').value,
