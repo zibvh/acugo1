@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema({
   profile_health:   { type: Number, default: 100, min: 0, max: 100 },
   is_verified:     { type: Boolean, default: false },
   listing_credits:  { type: Number, default: 1 },
+  successful_sales_count: { type: Number, default: 0, min: 0 },
+  commission_tier:  { type: Number, default: 1, min: 1, max: 4 },
+  commission_percent: { type: Number, default: 7, min: 0, max: 100 },
+  tier_unlocked_at: { type: Date, default: null },
   bank_name:        { type: String, default: '' },
   bank_code:        { type: String, default: '' },
   account_number:   { type: String, default: '' },
@@ -79,6 +83,7 @@ const listingSchema = new mongoose.Schema({
   ai_flag_category:{ type: String, default: '' },
   ai_flagged_at:   { type: Date, default: null },
   ai_reviewed:     { type: Boolean, default: false },
+  expires_at:      { type: Date, default: null },
 }, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
 
 listingSchema.index({ category: 1 });
@@ -237,6 +242,46 @@ const ConversationReport = mongoose.model('ConversationReport', conversationRepo
 const Order              = mongoose.model('Order',              orderSchema);
 const Broadcast          = mongoose.model('Broadcast',          broadcastSchema);
 
+const SELLER_COMMISSION_TIERS = [
+  { level: 1, threshold: 0, commission_percent: 7.0, label: 'Starter', discount_cap: 0 },
+  { level: 2, threshold: 10, commission_percent: 6.5, label: 'Trusted', discount_cap: 2 },
+  { level: 3, threshold: 25, commission_percent: 6.0, label: 'Reliable', discount_cap: 4 },
+  { level: 4, threshold: 50, commission_percent: 5.5, label: 'Top seller', discount_cap: 6 },
+];
+
+function getSellerCommissionInfo(successfulSalesCount = 0) {
+  let selected = SELLER_COMMISSION_TIERS[0];
+  let next = null;
+
+  for (let i = 0; i < SELLER_COMMISSION_TIERS.length; i += 1) {
+    const tier = SELLER_COMMISSION_TIERS[i];
+    if (successfulSalesCount >= tier.threshold) {
+      selected = tier;
+      continue;
+    }
+    next = tier;
+    break;
+  }
+
+  const salesSinceCurrent = Math.max(0, successfulSalesCount - selected.threshold);
+  const remainingToNext = next ? Math.max(0, next.threshold - successfulSalesCount) : 0;
+  const span = next ? Math.max(1, next.threshold - selected.threshold) : 1;
+  const progressToNext = next ? Math.min(100, Math.max(0, (salesSinceCurrent / span) * 100)) : 100;
+
+  return {
+    level: selected.level,
+    label: selected.label,
+    commission_percent: Number(selected.commission_percent),
+    discount_cap: selected.discount_cap,
+    sales_count: Number(successfulSalesCount),
+    next_tier: next ? next.level : null,
+    next_tier_label: next ? next.label : null,
+    next_threshold: next ? next.threshold : null,
+    remaining_sales_to_next: remainingToNext,
+    progress_to_next: Math.round(progressToNext),
+  };
+}
+
 async function connectDb() {
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error('MONGODB_URI environment variable is not set');
@@ -244,4 +289,19 @@ async function connectDb() {
   console.log('  MongoDB connected:', mongoose.connection.host);
 }
 
-module.exports = { connectDb, User, Listing, Waitlist, Hostel, SavedListing, CartItem, Conversation, Message, ConversationReport, Order, Broadcast };
+module.exports = {
+  connectDb,
+  User,
+  Listing,
+  Waitlist,
+  Hostel,
+  SavedListing,
+  CartItem,
+  Conversation,
+  Message,
+  ConversationReport,
+  Order,
+  Broadcast,
+  SELLER_COMMISSION_TIERS,
+  getSellerCommissionInfo,
+};

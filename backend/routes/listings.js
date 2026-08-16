@@ -11,6 +11,11 @@ function lean(doc) {
   o.id = o._id; return o;
 }
 
+function isListingExpired(listing) {
+  if (!listing || !listing.expires_at) return false;
+  return new Date(listing.expires_at).getTime() <= Date.now();
+}
+
 // Deterministic hash (FNV-1a) — same input always gives the same number, so
 // "random" order stays put across requests instead of jumping on every reload.
 // Needs real avalanche behavior: a naive polynomial hash barely moves when only
@@ -65,6 +70,10 @@ router.get('/', optionalAuth, async (req, res) => {
     const { q, category, condition, min_price, max_price, sort = 'recommended', page = 1, limit = 12 } = req.query;
 
     const filter = { status: 'active' };
+    const now = new Date();
+    filter.$and = [
+      { $or: [{ expires_at: { $exists: false } }, { expires_at: null }, { expires_at: { $gt: now } }] },
+    ];
     if (category && category !== 'All') filter.category = category;
     if (condition) filter.condition = condition;
     if (min_price || max_price) {
@@ -136,7 +145,7 @@ router.get('/saved', authMiddleware, async (req, res) => {
       .sort({ created_at: -1 }).lean();
 
     const listings = saves
-      .filter(s => s.listing_id && s.listing_id.status === 'active')
+      .filter(s => s.listing_id && s.listing_id.status === 'active' && !isListingExpired(s.listing_id))
       .map(s => {
         const l = s.listing_id;
         return {
@@ -147,6 +156,7 @@ router.get('/saved', authMiddleware, async (req, res) => {
           seller_verified: l.seller_id?.is_verified,
           seller_id:       l.seller_id?._id || l.seller_id,
           is_saved:        true,
+          is_expired:      false,
         };
       });
     res.json({ listings });
@@ -196,6 +206,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       seller_delivery_info: s.delivery_info,
       campus:              s.university,
       is_saved,
+      is_expired:          isListingExpired(listing),
       seller_reviews:      seller_reviews.map(r => ({
         rating:      r.buyer_rating,
         review:      r.buyer_review,
@@ -224,6 +235,7 @@ router.post('/', authMiddleware, async (req, res) => {
     if (Array.isArray(images) && images.length > 5)
       return res.status(400).json({ error: 'Maximum 5 photos allowed per listing' });
 
+    const expiresAt = new Date(Date.now() + (90 * 24 * 60 * 60 * 1000));
     const listing = await Listing.create({
       seller_id: req.user.id, title, description,
       price: parseFloat(price),
@@ -231,6 +243,7 @@ router.post('/', authMiddleware, async (req, res) => {
       category, condition,
       delivery_window: delivery_window || '1d',
       images: Array.isArray(images) ? images.slice(0, 5) : [],
+      expires_at: expiresAt,
     });
 
     // Listings are free; no listing credit deduction.
@@ -275,6 +288,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
     const ageMs = Date.now() - new Date(listing.created_at).getTime();
     if (ageMs > EDIT_LOCK_MS)
       return res.status(403).json({ error: 'Listings can only be edited within 90 minutes of being created.' });
+    if (isListingExpired(listing))
+      return res.status(403).json({ error: 'This listing has expired. Renew it before editing.' });
 
     const { title, description, price, original_price, category, condition, status, images, delivery_window } = req.body;
     const allowedWindows = ['6h','12h','1d','3d','7d'];
@@ -316,9 +331,15 @@ router.post('/:id/relist', authMiddleware, async (req, res) => {
     const listing = await Listing.findById(req.params.id);
     if (!listing) return res.status(404).json({ error: 'Not found' });
     if (String(listing.seller_id) !== String(req.user.id)) return res.status(403).json({ error: 'Forbidden' });
-    if (listing.status !== 'sold') return res.status(400).json({ error: 'Only sold listings can be relisted' });
+    if (!['sold', 'active'].includes(listing.status) && !isListingExpired(listing))
+      return res.status(400).json({ error: 'This listing cannot be relisted right now' });
 
-    const updated = await Listing.findByIdAndUpdate(req.params.id, { $set: { status: 'active' } }, { new: true }).lean();
+    const updated = await Listing.findByIdAndUpdate(req.params.id, {
+      $set: {
+        status: 'active',
+        expires_at: new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)),
+      },
+    }, { new: true }).lean();
     res.json({ ...updated, id: updated._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

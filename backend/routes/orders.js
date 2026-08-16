@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { Order, Listing, User, SavedListing, CartItem } = require('../db/database');
+const { Order, Listing, User, SavedListing, CartItem, getSellerCommissionInfo } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
@@ -12,10 +12,12 @@ const { sendOrderSellerAlertEmail, sendOrderRefundEmail } = require('../utils/em
 router.get('/stats', authMiddleware, async (req, res) => {
   try {
     const uid = req.user.id;
-    const [listings, orders] = await Promise.all([
+    const [listings, orders, seller] = await Promise.all([
       Listing.find({ seller_id: uid, status: { $ne: 'deleted' } }).lean(),
       Order.find({ seller_id: uid }).lean(),
+      User.findById(uid).select('successful_sales_count commission_tier commission_percent').lean(),
     ]);
+    const commission = getSellerCommissionInfo(Number(seller?.successful_sales_count || 0));
     res.json({
       total_listings:  listings.length,
       active_listings: listings.filter(l => l.status === 'active').length,
@@ -24,6 +26,11 @@ router.get('/stats', authMiddleware, async (req, res) => {
       total_views:     listings.reduce((s, l) => s + (l.views || 0), 0),
       total_saved:     listings.reduce((s, l) => s + (l.saves || 0), 0),
       pending_orders:  orders.filter(o => o.status === 'pending').length,
+      commission_tier: commission.level,
+      commission_percent: commission.commission_percent,
+      successful_sales_count: commission.sales_count,
+      progress_to_next: commission.progress_to_next,
+      remaining_sales_to_next: commission.remaining_sales_to_next,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -142,7 +149,7 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     const alreadyUsed = await User.findOne({ used_payment_refs: payment_reference });
     if (alreadyUsed) return res.status(409).json({ error: 'Payment reference already used' });
 
-    const expectedTotalKobo = cartItems.reduce((sum, c) => sum + c.listing_id.price, 0) * 100;
+    const expectedTotalKobo = cartItems.reduce((sum, c) => sum + Number(c.listing_id.price || 0), 0) * 100;
 
     const _fetch = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
     const paystackRes  = await _fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(payment_reference)}`, {
@@ -156,9 +163,15 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       console.error('[checkout] Not verified. status:', paystackData.data?.status, 'msg:', paystackData.message);
       return res.status(400).json({ error: 'Payment not verified: ' + (paystackData.message || paystackData.data?.gateway_response || 'unknown') });
     }
-    if (paystackData.data.amount !== expectedTotalKobo) {
-      console.error('[checkout] Amount mismatch. paid:', paystackData.data.amount, 'expected:', expectedTotalKobo);
-      return res.status(400).json({ error: 'Paid amount does not match cart total — contact support' });
+
+    const actualPaidKobo = Number(paystackData.data?.amount || 0);
+    if (actualPaidKobo < expectedTotalKobo) {
+      console.error('[checkout] Amount mismatch. paid:', actualPaidKobo, 'expected:', expectedTotalKobo);
+      return res.status(400).json({ error: 'Paid amount is less than the cart total — contact support' });
+    }
+    const gatewayFeeKobo = actualPaidKobo - expectedTotalKobo;
+    if (gatewayFeeKobo > 0) {
+      console.log('[checkout] Paystack gateway fee detected:', gatewayFeeKobo, 'kobo');
     }
 
     const checkout_group = uuidv4();
