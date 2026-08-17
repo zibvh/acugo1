@@ -4,9 +4,13 @@
  * for policy violations and flags anything suspicious.
  */
 
-const { Listing, Conversation, Message } = require('../db/database');
+const { Listing, Conversation, Message, Order, User } = require('../db/database');
 const { moderateListing, moderateMessage } = require('./aiModerator');
 const { notifyUser } = require('../db/push');
+const { sendOrderRefundEmail } = require('./email');
+const { listRefunds } = require('./paystack');
+const ordersRouter = require('../routes/orders');
+const cancelOrderAndRefund = ordersRouter.cancelOrderAndRefund;
 const fetch = require('node-fetch');
 
 const SWEEP_INTERVAL_MS = 26 * 60 * 60 * 1000;
@@ -40,6 +44,103 @@ Respond ONLY with JSON: {"flagged":true|false,"reason":"short reason or empty","
     const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
     return { flagged: !!parsed.flagged, reason: parsed.reason || '', category: parsed.category || '' };
   } catch (e) { console.warn('[sweep] error:', e.message); return { flagged: false }; }
+}
+
+
+
+async function syncRefundStatuses() {
+  const orders = await Order.find({
+    payment_reference: { $ne: null },
+    refund_status: { $in: ['pending', 'processing', 'needs-attention'] },
+  }).limit(100).lean();
+
+  for (const order of orders) {
+    try {
+      const refunds = await listRefunds({ transaction: order.payment_reference, perPage: 100 });
+      const own = (Array.isArray(refunds) ? refunds : []).find(r =>
+        String(r.merchant_note || '').includes(String(order._id))
+      );
+      if (!own) continue;
+
+      const status = String(own.status);
+      const update = { refund_status: status };
+      if (own.id) update.refund_reference = String(own.id);
+      if (status === 'processed') {
+        update.payment_status = 'refunded';
+        update.payout_status = 'refunded';
+        update.refund_processed_at = own.refunded_at ? new Date(own.refunded_at) : new Date();
+      } else if (status === 'failed') {
+        update.refund_error = own.reason || own.message || 'Paystack refund failed';
+      }
+      await Order.findByIdAndUpdate(order._id, { $set: update });
+    } catch (e) {
+      console.error(`[refunds] Failed to sync ${order._id}:`, e.message);
+    }
+  }
+}
+
+async function sweepExpiredOrders() {
+  const now = new Date();
+  const responseExpired = await Order.find({
+    status: 'paid',
+    escrow_status: 'held',
+    payment_status: 'paid',
+    response_deadline_at: { $ne: null, $lt: now },
+  }).limit(50);
+
+  const deliveryExpired = await Order.find({
+    status: { $in: ['confirmed', 'fulfilled', 'completing'] },
+    escrow_status: 'held',
+    payment_status: 'paid',
+    delivery_deadline_at: { $ne: null, $lt: now },
+  }).limit(50);
+
+  const expired = [...responseExpired, ...deliveryExpired];
+  if (!expired.length) return;
+  console.log(`[orders] Found ${expired.length} expired order(s) requiring cancellation/refund`);
+
+  for (const order of expired) {
+    try {
+      const reason = order.status === 'paid'
+        ? 'Seller did not respond within the required 6-hour window.'
+        : 'The seller missed the delivery deadline.';
+
+      const result = await cancelOrderAndRefund(order, reason);
+      const listing = await Listing.findById(order.listing_id).select('title').lean();
+      const title = listing?.title || 'your order';
+
+      await notifyUser(String(order.buyer_id), {
+        title: 'Refund initiated',
+        body: `Your payment for ${title} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.` ,
+        type: 'refund',
+        url: `/pages/orders.html?id=${order._id}`,
+      }).catch(() => {});
+
+      await notifyUser(String(order.seller_id), {
+        title: 'Order cancelled',
+        body: `${title} was cancelled because the order deadline was missed.`,
+        type: 'order',
+        url: `/pages/messages.html?conv=${order._id}`,
+      }).catch(() => {});
+
+      if (result.initiated) {
+        const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
+        if (buyer?.email) {
+          await sendOrderRefundEmail(buyer.email, {
+            buyerName: buyer.full_name || 'buyer',
+            listingTitle: title,
+            reason,
+            amount: order.amount,
+            refundStatus: order.refund_status,
+          }).catch(() => {});
+        }
+      }
+      console.log(`[orders] Cancelled/refund initiated for ${order._id} (${reason})`);
+    } catch (e) {
+      console.error(`[orders] Failed to cancel/refund ${order._id}:`, e.message);
+      // Leave the order untouched so the next sweep can retry safely.
+    }
+  }
 }
 
 async function sweepListings() {
@@ -113,6 +214,7 @@ async function runSweep() {
   sweepRunning = true;
   console.log(`[sweep] Starting AI sweep — ${new Date().toISOString()}`);
   try {
+    await sweepExpiredOrders();
     await sweepListings();
     await sweepMessages();
     console.log(`[sweep] Sweep complete — ${new Date().toISOString()}`);
@@ -125,18 +227,27 @@ async function runSweep() {
 
 // ── Schedule ──────────────────────────────────────────────────────────────────
 function startSweepScheduler() {
+  const ORDER_SWEEP_INTERVAL_MS = 60 * 1000;
+
+  // Order deadlines are time-sensitive, so they run independently of Gemini.
+  setTimeout(() => {
+    sweepExpiredOrders().catch(e => console.error('[orders] Initial expiry sweep failed:', e.message));
+    syncRefundStatuses().catch(e => console.error('[refunds] Initial sync failed:', e.message));
+  }, 15 * 1000);
+  setInterval(() => {
+    sweepExpiredOrders().catch(e => console.error('[orders] Expiry sweep failed:', e.message));
+    syncRefundStatuses().catch(e => console.error('[refunds] Sync failed:', e.message));
+  }, ORDER_SWEEP_INTERVAL_MS);
+  console.log('[orders] Deadline/refund scheduler started — checks every 60s');
+
   if (!process.env.GEMINI_API_KEY) {
     console.log('[sweep] GEMINI_API_KEY not set — AI sweep disabled');
     return;
   }
 
-  // Run first sweep 2 minutes after server starts (let DB settle)
   setTimeout(runSweep, 2 * 60 * 1000);
-
-  // Then every 26 hours
   setInterval(runSweep, SWEEP_INTERVAL_MS);
-
-  console.log(`[sweep] Scheduler started — first sweep in 2 min, then every 26h`);
+  console.log(`[sweep] AI scheduler started — first sweep in 2 min, then every 26h`);
 }
 
 module.exports = { startSweepScheduler, runSweep };

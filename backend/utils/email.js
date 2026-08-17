@@ -123,17 +123,21 @@ async function sendOrderSellerAlertEmail(to, { buyerName, listingTitle, orderId,
   });
 }
 
-async function sendOrderRefundEmail(to, { buyerName, listingTitle, reason }) {
+async function sendOrderRefundEmail(to, { buyerName, listingTitle, reason, amount, refundStatus = 'pending' }) {
+  const statusText = refundStatus === 'processed'
+    ? 'Paystack has marked the refund as processed.'
+    : 'The refund has been initiated with Paystack and may take some time to reach your account.';
   await sendMail({
     to,
-    subject: `Payment refunded for ${listingTitle}`,
+    subject: `Refund initiated for ${listingTitle}`,
     html: `
       <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fafafa;border-radius:12px;">
-        <h2 style="color:#1a1a1a;margin-bottom:8px;">Refund processed</h2>
-        <p style="color:#555;line-height:1.6;">
-          Hi ${buyerName}, your payment for <strong>${listingTitle}</strong> has been refunded because the seller did not respond in time or the delivery window was missed.
-        </p>
-        <p style="color:#555;line-height:1.6;">Reason: <strong>${reason}</strong></p>
+        <h2 style="color:#1a1a1a;margin-bottom:8px;">Payment refund initiated</h2>
+        <p style="color:#555;line-height:1.6;">Hi ${buyerName}, your Bixcart order for <strong>${listingTitle}</strong> was cancelled.</p>
+        <p style="color:#555;line-height:1.6;"><strong>Refund amount:</strong> ₦${Number(amount || 0).toLocaleString('en-NG')}</p>
+        <p style="color:#555;line-height:1.6;">${statusText}</p>
+        <p style="color:#555;line-height:1.6;"><strong>Reason:</strong> ${reason}</p>
+        <p style="color:#999;font-size:13px;line-height:1.6;">Paystack notes that processed refunds can still take up to 10 business days to reach the customer, depending on the processing rails.</p>
       </div>`,
   });
 }

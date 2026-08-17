@@ -5,8 +5,103 @@ const { Order, Listing, User, SavedListing, CartItem, getSellerCommissionInfo } 
 const { authMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
-const { createTransferRecipient, initiateTransfer } = require('../utils/paystack');
+const { createTransferRecipient, initiateTransfer, createRefund, listRefunds, verifyTransaction } = require('../utils/paystack');
 const { sendOrderSellerAlertEmail, sendOrderRefundEmail } = require('../utils/email');
+
+const refundLocks = new Map();
+
+async function withRefundLock(reference, fn) {
+  const previous = refundLocks.get(reference) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  refundLocks.set(reference, current);
+  await previous;
+  try { return await fn(); } finally {
+    release();
+    if (refundLocks.get(reference) === current) refundLocks.delete(reference);
+  }
+}
+
+async function initiateOrderRefund(order, reason) {
+  if (!order.payment_reference || order.payment_status !== 'paid') {
+    order.refund_status = 'not_required';
+    order.payout_status = 'refunded';
+    await order.save();
+    return { initiated: false, skipped: true };
+  }
+  if (['pending','processing','needs-attention','processed'].includes(order.refund_status)) {
+    return { initiated: order.refund_status !== 'processed', skipped: true, status: order.refund_status };
+  }
+
+  return withRefundLock(order.payment_reference, async () => {
+    const fresh = await Order.findById(order._id);
+    if (!fresh) throw new Error('Order disappeared while processing refund');
+    if (['pending','processing','needs-attention','processed'].includes(fresh.refund_status)) return { initiated: false, skipped: true, status: fresh.refund_status };
+
+    const [refunds, transaction] = await Promise.all([
+      listRefunds({ transaction: fresh.payment_reference, perPage: 100 }),
+      verifyTransaction(fresh.payment_reference),
+    ]);
+    const valid = new Set(['pending','processing','needs-attention','processed']);
+    const existing = (Array.isArray(refunds) ? refunds : []).filter(r => valid.has(String(r.status)));
+    const amountKobo = Math.round(Number(fresh.amount || 0) * 100);
+    const transactionKobo = Number(transaction?.amount || 0);
+    if (amountKobo <= 0 || transactionKobo <= 0) throw new Error('Invalid Paystack refund amount or transaction amount');
+
+    const ownRefund = existing.find(r => String(r.merchant_note || '').includes(String(fresh._id)));
+    if (ownRefund) {
+      fresh.refund_amount = Number(ownRefund.amount || fresh.amount || 0) / 100;
+      fresh.refund_reference = ownRefund.id ? String(ownRefund.id) : (ownRefund.refund_reference || null);
+      fresh.refund_status = String(ownRefund.status);
+      fresh.payment_status = fresh.refund_status === 'processed' ? 'refunded' : 'paid';
+      fresh.payout_status = 'refunded';
+      await fresh.save();
+      Object.assign(order, fresh.toObject());
+      return { initiated: false, skipped: true, status: fresh.refund_status };
+    }
+
+    const existingKobo = existing.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const remainingKobo = transactionKobo - existingKobo;
+    if (remainingKobo < amountKobo) {
+      throw new Error(`Insufficient refundable balance on Paystack transaction ${fresh.payment_reference}`);
+    }
+    let refund;
+    try {
+      refund = await createRefund({
+        transaction: fresh.payment_reference,
+        amount: fresh.amount,
+        customer_note: `Bixcart refund for cancelled order ${fresh._id}`,
+        merchant_note: `Bixcart order ${fresh._id} cancelled: ${reason}`,
+      });
+    } catch (error) {
+      fresh.refund_status = 'failed';
+      fresh.refund_error = error.message || 'Paystack refund request failed';
+      await fresh.save();
+      throw error;
+    }
+    fresh.refund_amount = Number(fresh.amount || 0);
+    fresh.refund_reference = refund?.id ? String(refund.id) : (refund?.refund_reference || null);
+    fresh.refund_status = ['pending','processing','needs-attention','processed'].includes(String(refund?.status)) ? String(refund.status) : 'pending';
+    fresh.refund_error = '';
+    fresh.refund_initiated_at = new Date();
+    fresh.payout_status = 'refunded';
+    fresh.payment_status = fresh.refund_status === 'processed' ? 'refunded' : 'paid';
+    await fresh.save();
+    Object.assign(order, fresh.toObject());
+    return { initiated: true, status: fresh.refund_status, amount: fresh.refund_amount };
+  });
+}
+
+async function cancelOrderAndRefund(order, reason) {
+  const refund = await initiateOrderRefund(order, reason);
+  order.status = 'cancelled';
+  order.escrow_status = 'cancelled';
+  order.payout_status = 'refunded';
+  if (order.payment_reference && refund.initiated) order.payment_status = order.refund_status === 'processed' ? 'refunded' : 'paid';
+  await order.save();
+  await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'active' } });
+  return refund;
+}
 
 // GET /api/orders/stats  — before /:id
 router.get('/stats', authMiddleware, async (req, res) => {
@@ -273,12 +368,34 @@ router.put('/:id/status', authMiddleware, async (req, res) => {
     if (!valid[role]?.[order.status]?.includes(status))
       return res.status(400).json({ error: 'Invalid status transition' });
 
-    await Order.findByIdAndUpdate(req.params.id, { $set: { status } });
+    if (status === 'cancelled') {
+      const reason = role === 'seller' ? 'The seller cancelled the order.' : 'The buyer cancelled the order.';
+      const refund = await cancelOrderAndRefund(order, reason);
+      const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
+      const listing = await Listing.findById(order.listing_id).select('title').lean();
+      await notifyUser(String(order.buyer_id), {
+        title: refund.initiated ? 'Refund initiated' : 'Order cancelled',
+        body: refund.initiated
+          ? `Your payment for ${listing?.title || 'this order'} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.`
+          : `Your order for ${listing?.title || 'this item'} was cancelled.`,
+        type: 'refund',
+        url: `/pages/orders.html?id=${order._id}`,
+      }).catch(() => {});
+      if (refund.initiated && buyer?.email) {
+        await sendOrderRefundEmail(buyer.email, {
+          buyerName: buyer.full_name || 'buyer',
+          listingTitle: listing?.title || 'your item',
+          reason,
+          amount: order.amount,
+          refundStatus: order.refund_status,
+        }).catch(() => {});
+      }
+    } else {
+      await Order.findByIdAndUpdate(req.params.id, { $set: { status } });
+      if (status === 'completed') await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
+    }
 
-    if (status === 'completed') await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' }   });
-    if (status === 'cancelled') await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'active' } });
-
-    res.json({ success: true, status });
+    res.json({ success: true, status: 'cancelled' === status ? 'cancelled' : status });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -530,20 +647,33 @@ router.post('/:id/resolve', authMiddleware, async (req, res) => {
       update.seller_payout_amount = Number((order.amount - (update.platform_fee_amount || 0)).toFixed(2));
       await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
     } else {
-      await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'active' } });
+      const reason = isSeller
+        ? 'The seller declined the order.'
+        : 'The buyer cancelled the order before fulfilment.';
+      const refund = await cancelOrderAndRefund(order, reason);
       const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
       const listing = await Listing.findById(order.listing_id).select('title').lean();
-      if (buyer?.email) {
+      await notifyUser(String(order.buyer_id), {
+        title: 'Refund initiated',
+        body: `Your payment for ${listing?.title || 'this order'} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.`,
+        type: 'refund',
+        url: `/pages/orders.html?id=${order._id}`,
+      }).catch(() => {});
+      if (refund.initiated && buyer?.email) {
         await sendOrderRefundEmail(buyer.email, {
           buyerName: buyer.full_name || 'buyer',
           listingTitle: listing?.title || 'your item',
-          reason: 'Seller did not respond within the required 6-hour window.',
+          reason,
+          amount: order.amount,
+          refundStatus: order.refund_status,
         }).catch(() => {});
       }
     }
 
-    const updated = await Order.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
-    res.json({ ...updated.toObject(), id: updated._id, needs_rating: isBuyer });
+    const updated = await Order.findById(req.params.id);
+    if (outcome === 'completed') await updated.updateOne({ $set: update });
+    const finalOrder = await Order.findById(req.params.id);
+    res.json({ ...finalOrder.toObject(), id: finalOrder._id, needs_rating: isBuyer });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -581,4 +711,5 @@ router.post('/:id/rate', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+router.cancelOrderAndRefund = cancelOrderAndRefund;
 module.exports = router;

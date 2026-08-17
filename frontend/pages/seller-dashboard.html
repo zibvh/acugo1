@@ -562,7 +562,7 @@
     if (!confirm('Decline this order? The buyer will be refunded and the listing will relist.')) return;
     try {
       await api.post(`/orders/${id}/resolve`, { outcome: 'cancelled' });
-      toast('Order declined', 'success');
+      toast('Order declined — buyer refund initiated', 'success');
       loadOrders();
     } catch (e) { toast(e.message, 'error'); }
   };
