@@ -1,11 +1,11 @@
 const express = require('express');
 const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { Order, Listing, User, SavedListing, CartItem, getSellerCommissionInfo } = require('../db/database');
+const { Order, Listing, User, SavedListing, CartItem, CheckoutIntent, getSellerCommissionInfo } = require('../db/database');
 const { authMiddleware, sellerApprovalMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
-const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
-const { createTransferRecipient, initiateTransfer, createRefund, listRefunds, verifyTransaction } = require('../utils/paystack');
+const { generateVerificationCode, verifyEscrowCode } = require('../utils/escrow');
+const { createRefund, listRefunds, verifyTransaction, initializeTransaction, initiateTransfer, createTransferRecipient } = require('../utils/paystack');
 const { sendOrderSellerAlertEmail, sendOrderRefundEmail } = require('../utils/email');
 
 const refundLocks = new Map();
@@ -220,130 +220,190 @@ router.post('/', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/orders/checkout — turns the buyer's cart into orders, AFTER verifying
-// a completed Paystack payment for the full cart total. A cart can hold items
-// from several sellers, so it splits into one Order per seller; every resulting
-// order shares a checkout_group (one purchase) and the same payment_reference.
-router.post('/checkout', authMiddleware, async (req, res) => {
+// POST /api/orders/initialize-payment — creates a normal Paystack collection payment.
+// IMPORTANT: do NOT use Paystack checkout splits here. Bixcart's escrow must hold the
+// buyer's funds until the order is completed. Seller payout happens later via Transfer API.
+router.post('/initialize-payment', authMiddleware, async (req, res) => {
   try {
-    const { delivery_address, payment_reference } = req.body;
-
+    const { delivery_address } = req.body;
     if (!delivery_address?.full_name || !delivery_address?.phone || !delivery_address?.address)
-      return res.status(400).json({ error: 'Full name, phone, and address are required' });
-    if (!payment_reference)
-      return res.status(400).json({ error: 'payment_reference is required' });
+      return res.status(400).json({ error: 'Full name, phone, and delivery address are required' });
 
     const cartItems = await CartItem.find({ user_id: req.user.id }).populate('listing_id');
     if (!cartItems.length) return res.status(400).json({ error: 'Your cart is empty' });
 
-    // Re-check every item is still buyable — cart may be stale (item sold/removed since adding)
     const unavailable = cartItems.filter(c => !c.listing_id || c.listing_id.status !== 'active');
-    if (unavailable.length) {
-      return res.status(409).json({
-        error: 'Some items in your cart are no longer available',
-        unavailable_ids: unavailable.map(c => c.listing_id?._id).filter(Boolean),
+    if (unavailable.length) return res.status(409).json({
+      error: 'Some items in your cart are no longer available',
+      unavailable_ids: unavailable.map(c => c.listing_id?._id).filter(Boolean),
+    });
+
+    const sellerIds = [...new Set(cartItems.map(c => String(c.listing_id.seller_id)))];
+    const sellers = await User.find({ _id: { $in: sellerIds } })
+      .select('full_name email phone role seller_approval_status successful_sales_count payout_recipient_code')
+      .lean();
+    const sellerMap = new Map(sellers.map(s => [String(s._id), s]));
+
+    for (const sid of sellerIds) {
+      const seller = sellerMap.get(sid);
+      if (!seller || seller.role !== 'seller' || seller.seller_approval_status !== 'approved')
+        return res.status(409).json({ error: 'One or more sellers are not approved yet.' });
+      if (!seller.payout_recipient_code) {
+        // Backwards compatibility for sellers who connected their bank on an older build.
+        // Convert the stored verified bank details into a Transfer Recipient once, then use
+        // that recipient for escrow release. This never routes checkout money directly.
+        const payoutSeller = await User.findById(sid).select('full_name email bank_code account_number account_name payout_recipient_code').lean();
+        if (!payoutSeller?.bank_code || !payoutSeller?.account_number || !payoutSeller?.account_name) {
+          return res.status(409).json({ error: 'One or more sellers have not connected a valid payout account yet.' });
+        }
+        try {
+          const recipient = await createTransferRecipient({
+            type: 'nuban', name: payoutSeller.account_name,
+            account_number: payoutSeller.account_number, bank_code: payoutSeller.bank_code,
+            currency: 'NGN', email: payoutSeller.email,
+            description: `Bixcart seller payout account for ${payoutSeller.full_name}`.slice(0, 200),
+          });
+          await User.updateOne({ _id: sid }, { $set: { payout_recipient_code: recipient.recipient_code, payout_status: 'ready', payout_error: '' } });
+          seller.payout_recipient_code = recipient.recipient_code;
+        } catch (e) {
+          return res.status(409).json({ error: 'One or more sellers have not connected a valid payout account yet.' });
+        }
+      }
+    }
+
+    const totalKobo = Math.round(cartItems.reduce((sum, c) => sum + Number(c.listing_id.price || 0), 0) * 100);
+    if (totalKobo <= 0) return res.status(400).json({ error: 'Invalid cart total' });
+
+    const grouped = new Map();
+    for (const item of cartItems) {
+      const amount = Number(item.listing_id.price || 0);
+      const sid = String(item.listing_id.seller_id);
+      if (!grouped.has(sid)) grouped.set(sid, { amount: 0, seller: sellerMap.get(sid), listing_ids: [] });
+      const g = grouped.get(sid);
+      g.amount += amount;
+      g.listing_ids.push(String(item.listing_id._id));
+    }
+
+    const intentItems = [];
+    for (const [sid, g] of grouped.entries()) {
+      const commission = getSellerCommissionInfo(Number(g.seller.successful_sales_count || 0));
+      intentItems.push({
+        seller_id: sid,
+        listing_ids: g.listing_ids,
+        amount: Number(g.amount.toFixed(2)),
+        commission_percent: commission.commission_percent,
+        commission_amount: Number((g.amount * commission.commission_percent / 100).toFixed(2)),
+        seller_share_kobo: Math.max(0, Math.round(g.amount * 100 * (1 - commission.commission_percent / 100))),
       });
     }
 
-    // A reference can only ever pay for one checkout — blocks replaying the same payment
+    const reference = 'bixcart_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+    const intent = await CheckoutIntent.create({
+      reference,
+      buyer_id: req.user.id,
+      expected_total_kobo: totalKobo,
+      delivery_address,
+      items: intentItems,
+      expires_at: new Date(Date.now() + 30 * 60 * 1000),
+    });
+
+    try {
+      const appUrl = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`;
+      const payment = await initializeTransaction({
+        email: req.user.email,
+        amount: totalKobo,
+        currency: 'NGN',
+        reference,
+        callback_url: `${appUrl}/pages/checkout.html?payment=success&reference=${encodeURIComponent(reference)}`,
+        metadata: { user_id: String(req.user.id), checkout_intent_id: String(intent._id), item_count: cartItems.length },
+      });
+      res.json({ reference, authorization_url: payment.authorization_url, access_code: payment.access_code });
+    } catch (e) {
+      await CheckoutIntent.deleteOne({ _id: intent._id }).catch(() => {});
+      throw e;
+    }
+  } catch (e) {
+    console.error('[initialize-payment] Exception:', e);
+    res.status(502).json({ error: e.message || 'Could not initialize payment' });
+  }
+});
+
+// POST /api/orders/checkout — finalizes a verified Paystack payment using the
+// server-created checkout intent. The browser cannot alter the split or amounts.
+router.post('/checkout', authMiddleware, async (req, res) => {
+  try {
+    const { delivery_address, payment_reference } = req.body;
+    if (!payment_reference) return res.status(400).json({ error: 'payment_reference is required' });
+
+    const intent = await CheckoutIntent.findOne({ reference: payment_reference, buyer_id: req.user.id, used_at: null });
+    if (!intent) return res.status(400).json({ error: 'Payment session not found or already used' });
+    if (intent.expires_at < new Date()) return res.status(400).json({ error: 'Payment session expired. Please start checkout again.' });
+
+    const transaction = await verifyTransaction(payment_reference);
+    if (!transaction || transaction.status !== 'success') return res.status(400).json({ error: 'Payment not verified' });
+    if (Number(transaction.amount || 0) !== Number(intent.expected_total_kobo)) {
+      return res.status(400).json({ error: 'Payment amount does not match the checkout total' });
+    }
+
+    const listingIds = intent.items.flatMap(i => i.listing_ids || []);
+    const listings = await Listing.find({ _id: { $in: listingIds }, status: 'active' }).lean();
+    if (listings.length !== listingIds.length) {
+      await createRefund({ transaction: payment_reference, amount: Number(intent.expected_total_kobo) / 100, customer_note: 'Bixcart checkout could not be completed because an item became unavailable.', merchant_note: `Bixcart automatic full refund for checkout ${intent._id}` }).catch(() => {});
+      return res.status(409).json({ error: 'One or more items became unavailable. Your refund has been initiated automatically.' });
+    }
+
+    const listingMap = new Map(listings.map(l => [String(l._id), l]));
+    const checkout_group = uuidv4();
+    const escrowCode = generateVerificationCode();
+    const ordersToCreate = [];
+    for (const item of intent.items) {
+      for (const listingId of item.listing_ids) {
+        const listing = listingMap.get(String(listingId));
+        const amount = Number(listing.price || 0);
+        const deliveryMinutes = { '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '7d': 10080 }[listing.delivery_window || '1d'] || 1440;
+        ordersToCreate.push({
+          listing_id: listing._id, buyer_id: req.user.id, seller_id: listing.seller_id, amount,
+          status: 'paid', escrow_status: 'held', escrow_code: escrowCode,
+          escrow_code_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          response_deadline_at: new Date(Date.now() + 6 * 60 * 60 * 1000),
+          delivery_deadline_at: new Date(Date.now() + deliveryMinutes * 60 * 1000),
+          platform_fee_percent: item.commission_percent,
+          platform_fee_amount: Number((amount * item.commission_percent / 100).toFixed(2)),
+          seller_payout_amount: Number((amount * (1 - item.commission_percent / 100)).toFixed(2)),
+          checkout_group, fulfillment: 'delivery', delivery_address: intent.delivery_address,
+          delivery_fee: 0, payment_method: 'card', payment_status: 'paid', payment_reference,
+          processing_fee_amount: 0, seller_processing_fee_share: 0,
+        });
+      }
+    }
+
     const alreadyUsed = await User.findOne({ used_payment_refs: payment_reference });
     if (alreadyUsed) return res.status(409).json({ error: 'Payment reference already used' });
 
-    const expectedTotalKobo = cartItems.reduce((sum, c) => sum + Number(c.listing_id.price || 0), 0) * 100;
-
-    const _fetch = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-    const paystackRes  = await _fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(payment_reference)}`, {
-      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
-    });
-    const paystackData = await paystackRes.json();
-
-    console.log('[checkout] Paystack response:', JSON.stringify(paystackData));
-
-    if (!paystackData.status || paystackData.data?.status !== 'success') {
-      console.error('[checkout] Not verified. status:', paystackData.data?.status, 'msg:', paystackData.message);
-      return res.status(400).json({ error: 'Payment not verified: ' + (paystackData.message || paystackData.data?.gateway_response || 'unknown') });
+    let orders;
+    try {
+      orders = await Order.insertMany(ordersToCreate);
+      await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'pending' } });
+    } catch (creationError) {
+      await createRefund({ transaction: payment_reference, amount: Number(intent.expected_total_kobo) / 100, customer_note: 'Bixcart could not complete your order after payment.', merchant_note: `Bixcart automatic full refund for checkout ${intent._id}: ${creationError.message}` }).catch(() => {});
+      await Order.deleteMany({ _id: { $in: orders?.map(o => o._id) || [] } }).catch(() => {});
+      await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'active' } }).catch(() => {});
+      throw creationError;
     }
-
-    const actualPaidKobo = Number(paystackData.data?.amount || 0);
-    if (actualPaidKobo < expectedTotalKobo) {
-      console.error('[checkout] Amount mismatch. paid:', actualPaidKobo, 'expected:', expectedTotalKobo);
-      return res.status(400).json({ error: 'Paid amount is less than the cart total — contact support' });
-    }
-    const gatewayFeeKobo = actualPaidKobo - expectedTotalKobo;
-    if (gatewayFeeKobo > 0) {
-      console.log('[checkout] Paystack gateway fee detected:', gatewayFeeKobo, 'kobo');
-    }
-
-    const checkout_group = uuidv4();
-    const escrowCode = generateVerificationCode();
-    const checkoutOrders = cartItems.map(c => {
-      const amount = Number(c.listing_id.price || 0);
-      const platformFee = Number((amount * 0.03 + 300).toFixed(2));
-      const sellerPayout = Number(Math.max(0, amount - platformFee).toFixed(2));
-      const listingWindow = c.listing_id.delivery_window || '1d';
-      const deliveryMinutes = { '6h': 6 * 60, '12h': 12 * 60, '1d': 24 * 60, '3d': 72 * 60, '7d': 7 * 24 * 60 }[listingWindow] || 24 * 60;
-      return {
-        listing_id:           c.listing_id._id,
-        buyer_id:             req.user.id,
-        seller_id:            c.listing_id.seller_id,
-        amount,
-        status:               'paid',
-        escrow_status:        'held',
-        escrow_code:          escrowCode,
-        escrow_code_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
-        response_deadline_at: new Date(Date.now() + 1000 * 60 * 60 * 6),
-        delivery_deadline_at: new Date(Date.now() + 1000 * 60 * deliveryMinutes),
-        platform_fee_percent: 3,
-        platform_fee_amount:  platformFee,
-        seller_payout_amount: sellerPayout,
-        checkout_group,
-        fulfillment:          'delivery',
-        delivery_address,
-        payment_method:       'card',
-        payment_status:       'paid',
-        payment_reference,
-      };
-    });
-    const orders = await Order.insertMany(checkoutOrders);
-
-    await Listing.updateMany(
-      { _id: { $in: cartItems.map(c => c.listing_id._id) } },
-      { $set: { status: 'pending' } }
-    );
-    await CartItem.deleteMany({ user_id: req.user.id });
+    await CartItem.deleteMany({ user_id: req.user.id, listing_id: { $in: listingIds } });
     await User.findByIdAndUpdate(req.user.id, { $addToSet: { used_payment_refs: payment_reference } });
+    intent.used_at = new Date();
+    await intent.save();
 
     for (const order of orders) {
       const sellerId = String(order.seller_id);
       const seller = await User.findById(sellerId).select('email full_name').lean();
       const listing = await Listing.findById(order.listing_id).select('title delivery_window').lean();
-      await notifyUser(sellerId, {
-        title: 'Payment held in escrow',
-        body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.',
-        type: 'escrow',
-        url: `/pages/messages.html?conv=${order._id}`,
-      }).catch(() => {});
-      if (seller?.email) {
-        await sendOrderSellerAlertEmail(seller.email, {
-          buyerName: req.user.full_name || 'A buyer',
-          listingTitle: listing?.title || 'your item',
-          orderId: String(order._id),
-          deliveryWindow: listing?.delivery_window || '1d',
-        }).catch(() => {});
-      }
+      await notifyUser(sellerId, { title: 'Payment received', body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.', type: 'escrow', url: `/pages/messages.html?conv=${order._id}` }).catch(() => {});
+      if (seller?.email) await sendOrderSellerAlertEmail(seller.email, { buyerName: req.user.full_name || 'A buyer', listingTitle: listing?.title || 'your item', orderId: String(order._id), deliveryWindow: listing?.delivery_window || '1d' }).catch(() => {});
     }
 
-    console.log('[checkout] Success. orders:', orders.length, 'group:', checkout_group, 'escrow_code:', escrowCode);
-    res.json({
-      checkout_group,
-      order_count: orders.length,
-      total: orders.reduce((sum, o) => sum + o.amount, 0),
-      // NOTE: verification_code intentionally NOT included here. The code is
-      // for the seller to hand to the buyer at pickup/delivery, proving the
-      // item actually changed hands — sending it to the buyer up front would
-      // let them "confirm delivery" without ever receiving anything.
-      orders: orders.map(o => ({ ...o.toObject(), id: o._id })),
-    });
+    res.json({ checkout_group, order_count: orders.length, total: orders.reduce((sum, o) => sum + o.amount, 0), orders: orders.map(o => ({ ...o.toObject(), id: o._id })) });
   } catch (e) {
     console.error('[checkout] Exception:', e.message);
     res.status(500).json({ error: e.message });
@@ -536,17 +596,61 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
     if (!verifyEscrowCode(code, order.escrow_code))
       return res.status(400).json({ error: 'Verification code is incorrect' });
 
-    const payoutAmount = Number(order.seller_payout_amount || calculatePayout(order.amount, order.platform_fee_percent || 3, 300));
-    const platformFee = Number(order.platform_fee_amount || (order.amount - payoutAmount));
+    if (!order.payment_reference) return res.status(400).json({ error: 'No payment reference is attached to this order' });
+    const payoutSeller = await User.findById(order.seller_id).select('payout_recipient_code payout_status email full_name').lean();
+    if (!payoutSeller?.payout_recipient_code || payoutSeller.payout_status !== 'ready')
+      return res.status(409).json({ error: 'Seller payout account is not ready. Escrow cannot be released yet.' });
+
+    // Read the real Paystack processing fee from the verified transaction. Paystack exposes
+    // the fee on the transaction response; we split that fee 50/50 between Bixcart and seller.
+    const transaction = await verifyTransaction(order.payment_reference);
+    const transactionAmount = Number(transaction?.amount || 0);
+    if (transaction?.status !== 'success' || transactionAmount <= 0)
+      return res.status(400).json({ error: 'The original payment could not be verified for payout' });
+
+    const totalFee = Math.max(0, Number(transaction?.fees || 0) / 100);
+    const checkoutOrders = await Order.find({ payment_reference: order.payment_reference, status: { $in: ['paid','fulfilled','completed'] } }).lean();
+    const checkoutTotal = checkoutOrders.reduce((sum, o) => sum + Number(o.amount || 0), 0) || Number(order.amount || 0);
+    const orderFeeShare = checkoutTotal > 0 ? totalFee * (Number(order.amount || 0) / checkoutTotal) : 0;
+    const sellerFeeShare = orderFeeShare / 2;
+    const platformFee = Number(order.platform_fee_amount || 0);
+    const sellerEntitlement = Math.max(0, Number(order.amount || 0) - platformFee);
+    const payoutAmount = Math.max(0, Number((sellerEntitlement - sellerFeeShare).toFixed(2)));
+
+    // Idempotency: never send the same escrow payout twice.
+    if (['queued','sent'].includes(order.payout_status) && order.payout_reference) {
+      return res.json({ success: true, escrow_status: 'released', payout_amount: payoutAmount, payout_status: order.payout_status, payout_reference: order.payout_reference, order: { ...order.toObject(), id: order._id } });
+    }
+
+    const transferReference = `bixpayout_${String(order._id)}_${Date.now()}`;
+    let transfer;
+    try {
+      transfer = await initiateTransfer({
+        source: 'balance',
+        amount: payoutAmount,
+        recipient: payoutSeller.payout_recipient_code,
+        reference: transferReference,
+        reason: `Bixcart escrow release for order ${order._id}`,
+        currency: 'NGN',
+      });
+    } catch (transferError) {
+      order.payout_status = 'failed';
+      order.payout_error = transferError.message || 'Seller payout could not be initiated';
+      await order.save();
+      return res.status(502).json({ error: 'Escrow could not be released because the seller payout could not be initiated. The order remains protected.' });
+    }
 
     order.status = 'completed';
     order.escrow_status = 'released';
     order.released_at = new Date();
     order.buyer_marked_complete = true;
     order.seller_marked_complete = true;
-    order.platform_fee_amount = platformFee;
+    order.processing_fee_amount = Number(orderFeeShare.toFixed(2));
+    order.seller_processing_fee_share = Number(sellerFeeShare.toFixed(2));
     order.seller_payout_amount = payoutAmount;
-    order.payout_status = 'pending';
+    order.payout_reference = transfer?.reference || transferReference;
+    order.payout_status = String(transfer?.status || '').toLowerCase() === 'success' ? 'sent' : 'queued';
+    order.payout_error = '';
     await order.save();
 
     await Listing.findByIdAndUpdate(order.listing_id, { $set: { status: 'sold' } });
@@ -560,45 +664,10 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
       sellerUser.commission_percent = commissionInfo.commission_percent;
       await sellerUser.save();
     }
-    if (process.env.PAYSTACK_SECRET_KEY && sellerUser?.bank_code && sellerUser?.account_number && sellerUser?.bank_name) {
-      try {
-        if (!sellerUser.payout_recipient_code) {
-          const recipient = await createTransferRecipient({
-            name: sellerUser.account_name || sellerUser.full_name,
-            account_number: sellerUser.account_number,
-            bank_code: sellerUser.bank_code,
-          });
-          sellerUser.payout_recipient_code = recipient.recipient_code;
-          sellerUser.payout_status = 'ready';
-          await sellerUser.save();
-        }
-
-        const transfer = await initiateTransfer({
-          amount: payoutAmount,
-          recipient: sellerUser.payout_recipient_code,
-          reason: `Bixcart payout for order ${order._id}`,
-        });
-
-        order.payout_status = 'sent';
-        order.payout_reference = transfer.reference || transfer.id || null;
-        await order.save();
-      } catch (payErr) {
-        sellerUser.payout_status = 'failed';
-        sellerUser.payout_error = payErr.message;
-        await sellerUser.save();
-
-        order.payout_status = 'failed';
-        order.payout_error = payErr.message;
-        await order.save();
-      }
-    } else {
-      sellerUser && (sellerUser.payout_status = 'not_configured');
-      if (sellerUser) await sellerUser.save();
-    }
 
     await notifyUser(String(order.seller_id), {
       title: 'Escrow released',
-      body: `Your payout of ₦${payoutAmount.toLocaleString('en-NG')} has been released after successful verification.`,
+      body: `Your escrow has been released and a ₦${payoutAmount.toLocaleString('en-NG')} payout has been initiated to your connected bank account through Paystack.`,
       type: 'payout',
       url: `/pages/messages.html?conv=${order._id}`,
     }).catch(() => {});

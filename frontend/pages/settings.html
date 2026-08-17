@@ -88,7 +88,18 @@
       </div>
     </div>
     
-    <div class="settings-grid-2" style="margin-bottom:16px;">
+    <div id="seller-location-settings" style="display:none;margin-bottom:16px;">
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Seller location</label>
+        <select class="form-select" id="s-location-type">
+          <option value="hostel">Hostel</option>
+          <option value="shop">Shop</option>
+        </select>
+        <span class="form-hint">Choose one location type. Sellers cannot use both.</span>
+      </div>
+    </div>
+
+    <div id="seller-hostel-settings" class="settings-grid-2" style="margin-bottom:16px;">
       <div class="form-group">
         <label class="form-label">Hostel name</label>
         <select class="form-select" id="s-hostel">
@@ -100,15 +111,18 @@
         <input class="form-input" id="s-room" type="text" placeholder="e.g. B204">
       </div>
     </div>
-    <div class="settings-grid-2" style="margin-bottom:16px;">
+    <div id="seller-shop-settings" class="settings-grid-2" style="margin-bottom:16px;display:none;">
       <div class="form-group">
-        <span class="form-hint">If you are not a student.(ie, sellers in complex)</span>
         <label class="form-label">Shop name</label>
         <input class="form-input" id="s-shop" type="text" placeholder="e.g. Chidi's Tech Corner">
       </div>
       <div class="form-group">
         <label class="form-label">Shop number</label>
         <input class="form-input" id="s-shop-number" type="text" placeholder="e.g. Shop 12">
+      </div>
+      <div class="form-group" style="grid-column:1/-1;">
+        <label class="form-label">Shop address</label>
+        <input class="form-input" id="s-shop-address" type="text" placeholder="e.g. Block B, ACU Mall">
       </div>
     </div>
 
@@ -126,6 +140,38 @@
   </div>
 
   <!-- Password -->
+  <!-- Seller payout -->
+  <div class="settings-section" id="seller-payout-settings" style="display:none;">
+    <h2>Payment & payout</h2>
+    <div class="section-sub">Connect the bank account where your Bixcart sales will be paid after an order is completed and escrow is released. Paystack verifies the account before it is connected.</div>
+
+    <div class="settings-grid-2" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label class="form-label">Account number</label>
+        <input class="form-input" id="p-account-number" inputmode="numeric" maxlength="10" placeholder="10-digit account number" autocomplete="off">
+        <span class="form-hint" id="p-bank-hint">Enter your account number to suggest matching banks.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Bank</label>
+        <select class="form-select" id="p-bank">
+          <option value="">Select bank</option>
+        </select>
+        <span class="form-hint">The suggested bank is only a prediction. Paystack performs the final verification.</span>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:16px;">
+      <label class="form-label">Account name</label>
+      <input class="form-input" id="p-account-name" readonly placeholder="Will be verified automatically">
+      <span class="form-hint" id="p-account-status"></span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="save-payout-btn">Connect bank account</button>
+      <span id="payout-connected" style="font-size:13px;color:var(--green);"></span>
+    </div>
+  </div>
+
   <div class="settings-section">
     <h2>Change password</h2>
     <div class="section-sub">Choose a strong password with uppercase, lowercase, and a number.</div>
@@ -184,6 +230,16 @@
     }
   }
 
+  function toggleSellerLocationSettings(type) {
+    const hostelBox = document.getElementById('seller-hostel-settings');
+    const shopBox = document.getElementById('seller-shop-settings');
+    if (!hostelBox || !shopBox) return;
+    hostelBox.style.display = type === 'hostel' ? 'grid' : 'none';
+    shopBox.style.display = type === 'shop' ? 'grid' : 'none';
+  }
+
+  document.getElementById('s-location-type')?.addEventListener('change', e => toggleSellerLocationSettings(e.target.value));
+
   async function loadSettings() {
     try {
       const u = await api.get('/auth/me');
@@ -196,8 +252,16 @@
       document.getElementById('s-room').value = u.room_number || '';
       document.getElementById('s-shop').value = u.shop_name || '';
       document.getElementById('s-shop-number').value = u.shop_number || '';
+      document.getElementById('s-shop-address').value = u.shop_address || '';
+      if (u.role === 'seller') {
+        document.getElementById('seller-location-settings').style.display = 'block';
+        const type = u.seller_location_type || (u.shop_name ? 'shop' : 'hostel');
+        document.getElementById('s-location-type').value = type;
+        toggleSellerLocationSettings(type);
+      }
       document.getElementById('s-delivery-info').value = u.delivery_info || '';
       document.getElementById('s-bio').value = u.bio || '';
+      await loadPayoutSetup(u);
 
       const avatarEl = document.getElementById('set-avatar');
       if (u.avatar_url) {
@@ -255,10 +319,12 @@
         full_name: document.getElementById('s-name').value,
         university: 'Ajayi Crowther University',
         location: nextLocation,
+        seller_location_type: document.getElementById('s-location-type')?.value || '',
         hostel_name: document.getElementById('s-hostel').value,
         room_number: document.getElementById('s-room').value,
         shop_name: document.getElementById('s-shop').value,
         shop_number: document.getElementById('s-shop-number').value,
+        shop_address: document.getElementById('s-shop-address').value,
         delivery_info: document.getElementById('s-delivery-info').value,
         bio: document.getElementById('s-bio').value,
       });
@@ -266,6 +332,104 @@
       toast('Profile updated!', 'success');
     } catch(e) { toast(e.message, 'error'); }
     btn.disabled = false; btn.innerHTML = 'Save changes';
+  });
+
+  // ─── Seller payout setup ─────────────────────────────────────────────────
+  const payoutSection = document.getElementById('seller-payout-settings');
+  const payoutBank = document.getElementById('p-bank');
+  const payoutAccount = document.getElementById('p-account-number');
+  const payoutName = document.getElementById('p-account-name');
+  const payoutHint = document.getElementById('p-bank-hint');
+  const payoutStatus = document.getElementById('p-account-status');
+  let payoutBanks = [];
+  let payoutResolveTimer = null;
+
+  async function loadPayoutSetup(u) {
+    if (u.role !== 'seller' || u.seller_approval_status !== 'approved') return;
+    payoutSection.style.display = 'block';
+    try {
+      const data = await api.get('/auth/payout-banks');
+      payoutBanks = data.banks || [];
+      payoutBank.innerHTML = '<option value="">Select bank</option>' + payoutBanks.map(b => `<option value="${b.code}" data-name="${String(b.name || '').replace(/"/g, '&quot;')}">${b.name}</option>`).join('');
+    } catch (e) {
+      payoutHint.textContent = 'Could not load banks. Please try again.';
+    }
+    payoutAccount.value = u.account_number || '';
+    payoutName.value = u.account_name || '';
+    if (u.bank_code) payoutBank.value = u.bank_code;
+    if (u.payout_status === 'ready') document.getElementById('payout-connected').textContent = '✓ Bank account connected';
+  }
+
+  async function predictPayoutBanks() {
+    const account = payoutAccount.value.replace(/\D/g, '');
+    payoutAccount.value = account;
+    payoutName.value = '';
+    payoutStatus.textContent = '';
+    if (account.length !== 10) {
+      payoutHint.textContent = 'Enter your 10-digit account number to suggest matching banks.';
+      return;
+    }
+    try {
+      const data = await api.get('/auth/payout-bank-predictions?account_number=' + encodeURIComponent(account));
+      const predictions = data.predictions || [];
+      if (!predictions.length) {
+        payoutHint.textContent = 'No bank prediction found. Select your bank manually.';
+        return;
+      }
+      const current = payoutBank.value;
+      const predictedCodes = new Set(predictions.map(x => String(x.code)));
+      const combined = [...predictions, ...payoutBanks.filter(b => !predictedCodes.has(String(b.code)))];
+      payoutBank.innerHTML = '<option value="">Select bank</option>' + combined.map(b => `<option value="${b.code}">${b.name}</option>`).join('');
+      payoutBank.value = current && predictedCodes.has(current) ? current : String(predictions[0].code);
+      payoutHint.textContent = 'Suggested bank: ' + predictions[0].name + '. Confirm it before continuing.';
+      await resolvePayoutAccount();
+    } catch (e) {
+      payoutHint.textContent = 'Select your bank manually, then we will verify the account.';
+    }
+  }
+
+  async function resolvePayoutAccount() {
+    const account = payoutAccount.value.replace(/\D/g, '');
+    const bank = payoutBank.value;
+    payoutName.value = '';
+    if (account.length !== 10 || !bank) return;
+    payoutStatus.textContent = 'Verifying account…';
+    try {
+      const data = await api.get(`/auth/resolve-bank-account?account_number=${encodeURIComponent(account)}&bank_code=${encodeURIComponent(bank)}`);
+      payoutName.value = data.account_name || '';
+      payoutStatus.textContent = data.account_name ? '✓ Account verified by Paystack' : '';
+    } catch (e) {
+      payoutStatus.textContent = 'Could not verify this account with the selected bank.';
+    }
+  }
+
+  payoutAccount?.addEventListener('input', () => {
+    clearTimeout(payoutResolveTimer);
+    payoutResolveTimer = setTimeout(predictPayoutBanks, 250);
+  });
+  payoutBank?.addEventListener('change', resolvePayoutAccount);
+
+  document.getElementById('save-payout-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('save-payout-btn');
+    const account_number = payoutAccount.value.replace(/\D/g, '');
+    const bank_code = payoutBank.value;
+    const bank_name = payoutBank.options[payoutBank.selectedIndex]?.textContent?.trim() || '';
+    const account_name = payoutName.value.trim();
+    if (account_number.length !== 10 || !bank_code || !account_name) {
+      toast('Enter a valid account number, confirm the bank, and wait for account verification.', 'error');
+      return;
+    }
+    btn.disabled = true; btn.innerHTML = icons.loader + ' Connecting…';
+    try {
+      const result = await api.post('/auth/payout-account', { bank_name, bank_code, account_number, account_name });
+      const fresh = await api.get('/auth/me');
+      auth.save(auth.getToken(), fresh);
+      document.getElementById('payout-connected').textContent = '✓ Bank account connected';
+      toast('Payout account connected. Paystack will handle your seller settlements automatically.', 'success');
+    } catch (e) {
+      toast(e.message || 'Could not connect payout account', 'error');
+    }
+    btn.disabled = false; btn.innerHTML = 'Connect bank account';
   });
 
   document.getElementById('save-password-btn').addEventListener('click', async () => {

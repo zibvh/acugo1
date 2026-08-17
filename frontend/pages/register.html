@@ -220,6 +220,19 @@
           <label class="form-label">Level <span style="color:var(--red);">*</span></label>
           <select class="form-select" id="reg-level" required><option value="">Select level</option><option value="100 Level">100 Level</option><option value="200 Level">200 Level</option><option value="300 Level">300 Level</option><option value="400 Level">400 Level</option><option value="500 Level">500 Level</option></select>
         </div>
+      </div>
+
+      <div id="seller-location-choice" class="form-group" style="display:none;margin-top:16px;">
+        <label class="form-label">Seller location <span style="color:var(--red);">*</span></label>
+        <select class="form-select" id="reg-location-type">
+          <option value="">Choose where customers can find you</option>
+          <option value="hostel">Hostel</option>
+          <option value="shop">Shop</option>
+        </select>
+        <div style="font-size:12px;color:var(--ink-3);margin-top:5px;">Choose one. Sellers cannot use both a hostel and a shop location.</div>
+      </div>
+
+      <div id="seller-hostel-fields" class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
         <div class="form-group">
           <label class="form-label">Hostel <span style="color:var(--red);">*</span></label>
           <select class="form-select" id="reg-hostel">
@@ -406,7 +419,18 @@
   // Adjust for role
   if (user?.role === 'seller') {
     document.getElementById('business-name-group').style.display = 'block';
-    document.getElementById('seller-shop-fields').style.display = 'grid';
+    document.getElementById('seller-location-choice').style.display = 'block';
+    document.getElementById('seller-hostel-fields').style.display = 'none';
+    document.getElementById('seller-shop-fields').style.display = 'none';
+  }
+
+  const locationTypeEl = document.getElementById('reg-location-type');
+  if (locationTypeEl) {
+    locationTypeEl.addEventListener('change', () => {
+      const type = locationTypeEl.value;
+      document.getElementById('seller-hostel-fields').style.display = type === 'hostel' ? 'grid' : 'none';
+      document.getElementById('seller-shop-fields').style.display = type === 'shop' ? 'grid' : 'none';
+    });
   }
 
   // Pre-fill name
@@ -561,6 +585,7 @@
     const name = document.getElementById('reg-fullname').value.trim();
     const business = document.getElementById('reg-business')?.value.trim() || '';
     const level = document.getElementById('reg-level')?.value.trim() || '';
+    const locationType = user?.role === 'seller' ? (document.getElementById('reg-location-type')?.value.trim() || '') : 'hostel';
     const hostel = document.getElementById('reg-hostel')?.value.trim() || '';
     const room = document.getElementById('reg-room')?.value.trim() || '';
     const shop = document.getElementById('reg-shop')?.value.trim() || '';
@@ -569,7 +594,14 @@
     const deliveryInfo = document.getElementById('reg-delivery-info')?.value.trim() || '';
 
     if (!name) { toast('Please enter your full name', 'error'); return; }
-    if (!level || !hostel || !room) { toast('Level, hostel and room number are required', 'error'); return; }
+    if (!level) { toast('Level is required', 'error'); return; }
+    if (user?.role === 'seller') {
+      if (!['hostel','shop'].includes(locationType)) { toast('Choose either a hostel or a shop', 'error'); return; }
+      if (locationType === 'hostel' && (!hostel || !room)) { toast('Hostel and room number are required', 'error'); return; }
+      if (locationType === 'shop' && (!shop || !shopNumber || !shopAddress)) { toast('Shop name, shop number and shop address are required', 'error'); return; }
+    } else if (!hostel || !room) {
+      toast('Hostel and room number are required', 'error'); return;
+    }
     if (!selectedIdType) { toast('Please select your ID type', 'error'); return; }
     if (!frontUrl) { toast('Please upload the front of your ID', 'error'); return; }
     if (!backUrl) { toast('Please upload the back of your ID', 'error'); return; }
@@ -581,9 +613,10 @@
       const updated = await api.put('/auth/complete-registration', {
         full_name: name,
         business_name: business,
-        hostel_name: hostel,
+        seller_location_type: locationType,
+        hostel_name: locationType === 'hostel' ? hostel : '',
         level,
-        room_number: room,
+        room_number: locationType === 'hostel' ? room : '',
         shop_name: user?.role === 'seller' ? shop : '',
         shop_number: user?.role === 'seller' ? shopNumber : '',
         shop_address: user?.role === 'seller' ? shopAddress : '',

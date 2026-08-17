@@ -8,6 +8,9 @@ const { User, Order, Listing, Waitlist, Hostel, AdminAction } = require('../db/d
 const { authMiddleware } = require('../middleware/auth');
 const { sendVerificationEmail, sendPasswordResetEmail, sendSellerApplicationEmail, sendSellerDecisionEmail } = require('../utils/email');
 const { notifyUser } = require('../db/push');
+const { listBanks, resolveBankAccount, createTransferRecipient } = require('../utils/paystack');
+let getPredictedBanks = null;
+try { getPredictedBanks = require('nuban-prediction'); } catch (_) { /* dependency is installed during deployment; keep server bootable before npm install */ }
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
@@ -323,6 +326,7 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
     const {
       full_name,
       business_name,
+      seller_location_type,
       hostel_name,
       level,
       room_number,
@@ -339,19 +343,41 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
     if (!current) return res.status(404).json({ error: 'User not found' });
 
     const allowedIdTypes = ['school_id', 'nin'];
-    if (!full_name || !level || !hostel_name || !room_number || !id_type || !id_front_url || !id_back_url)
-      return res.status(400).json({ error: 'Full name, level, hostel, room number, ID type and both ID photos are required' });
+    if (!full_name || !level || !id_type || !id_front_url || !id_back_url)
+      return res.status(400).json({ error: 'Full name, level, ID type and both ID photos are required' });
     if (!allowedIdTypes.includes(id_type))
       return res.status(400).json({ error: 'Only ACU School ID and NIN are accepted' });
     const allowedLevels = ['100 Level','200 Level','300 Level','400 Level','500 Level'];
     if (!allowedLevels.includes(String(level).trim())) return res.status(400).json({ error: 'Please select a valid level' });
-    const validHostel = await Hostel.findOne({ name: String(hostel_name).trim(), is_active: { $ne: false } }).lean();
-    if (!validHostel) return res.status(400).json({ error: 'Please select a valid hostel from the approved hostel list' });
+
+    const isSeller = current.role === 'seller';
+    let locationType = isSeller ? String(seller_location_type || '').trim().toLowerCase() : 'hostel';
+    if (!['hostel','shop'].includes(locationType)) {
+      return res.status(400).json({ error: isSeller ? 'Choose either a hostel or a shop as your seller location' : 'Hostel is required' });
+    }
+
+    const cleanHostel = String(hostel_name || '').trim();
+    const cleanRoom = String(room_number || '').trim();
+    const cleanShop = String(shop_name || '').trim();
+    const cleanShopNumber = String(shop_number || '').trim();
+    const cleanShopAddress = String(shop_address || '').trim();
+
+    if (locationType === 'hostel') {
+      if (!cleanHostel || !cleanRoom) return res.status(400).json({ error: 'Hostel and room number are required when using a hostel location' });
+      const validHostel = await Hostel.findOne({ name: cleanHostel, is_active: { $ne: false } }).lean();
+      if (!validHostel) return res.status(400).json({ error: 'Please select a valid hostel from the approved hostel list' });
+    } else {
+      if (!cleanShop || !cleanShopNumber || !cleanShopAddress) {
+        return res.status(400).json({ error: 'Shop name, shop number and shop address are required when using a shop location' });
+      }
+    }
+
     const update = {
       full_name: String(full_name).trim(),
       level: String(level).trim(),
-      hostel_name: String(hostel_name).trim(),
-      room_number: String(room_number).trim(),
+      seller_location_type: locationType,
+      hostel_name: locationType === 'hostel' ? cleanHostel : '',
+      room_number: locationType === 'hostel' ? cleanRoom : '',
       id_type,
       id_front_url,
       id_back_url,
@@ -361,9 +387,9 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
     // Only sellers may set shop/business fields.
     if (current.role === 'seller') {
       update.business_name = String(business_name || '').trim();
-      update.shop_name = String(shop_name || '').trim();
-      update.shop_number = String(shop_number || '').trim();
-      update.shop_address = String(shop_address || '').trim();
+      update.shop_name = locationType === 'shop' ? cleanShop : '';
+      update.shop_number = locationType === 'shop' ? cleanShopNumber : '';
+      update.shop_address = locationType === 'shop' ? cleanShopAddress : '';
       update.seller_approval_status = 'pending';
       update.seller_approval_reason = '';
       update.seller_approval_requested_at = new Date();
@@ -398,6 +424,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
       full_name,
       bio,
       business_name,
+      seller_location_type,
       hostel_name,
       level,
       room_number,
@@ -415,13 +442,46 @@ router.put('/profile', authMiddleware, async (req, res) => {
     const update = { full_name, bio };
     const currentProfileUser = await User.findById(req.user.id).select('role').lean();
     if (business_name !== undefined && currentProfileUser?.role === 'seller') update.business_name = business_name;
-    if (hostel_name !== undefined) update.hostel_name = hostel_name;
     if (level !== undefined) update.level = level;
-    if (room_number !== undefined) update.room_number = room_number;
     if (currentProfileUser?.role === 'seller') {
-      if (shop_name !== undefined) update.shop_name = shop_name;
-      if (shop_number !== undefined) update.shop_number = shop_number;
-      if (shop_address !== undefined) update.shop_address = shop_address;
+      const locationType = String(seller_location_type || '').trim().toLowerCase();
+      if (locationType && !['hostel','shop'].includes(locationType)) {
+        return res.status(400).json({ error: 'Seller location must be either hostel or shop' });
+      }
+      if (locationType === 'hostel') {
+        const h = String(hostel_name || '').trim();
+        const r = String(room_number || '').trim();
+        if (!h || !r) return res.status(400).json({ error: 'Hostel and room number are required for a hostel location' });
+        const validHostel = await Hostel.findOne({ name: h, is_active: { $ne: false } }).lean();
+        if (!validHostel) return res.status(400).json({ error: 'Please select a valid hostel from the approved hostel list' });
+        update.seller_location_type = 'hostel';
+        update.hostel_name = h;
+        update.room_number = r;
+        update.shop_name = '';
+        update.shop_number = '';
+        update.shop_address = '';
+      } else if (locationType === 'shop') {
+        const sn = String(shop_name || '').trim();
+        const snum = String(shop_number || '').trim();
+        const sa = String(shop_address || '').trim();
+        if (!sn || !snum || !sa) return res.status(400).json({ error: 'Shop name, shop number and shop address are required for a shop location' });
+        update.seller_location_type = 'shop';
+        update.shop_name = sn;
+        update.shop_number = snum;
+        update.shop_address = sa;
+        update.hostel_name = '';
+        update.room_number = '';
+      } else if (hostel_name !== undefined || shop_name !== undefined || shop_number !== undefined || shop_address !== undefined) {
+        return res.status(400).json({ error: 'Choose either hostel or shop as your seller location' });
+      }
+    } else {
+      if (hostel_name !== undefined) update.hostel_name = hostel_name;
+      if (room_number !== undefined) update.room_number = room_number;
+      // Buyers cannot set or retain seller shop details.
+      update.shop_name = '';
+      update.shop_number = '';
+      update.shop_address = '';
+      update.seller_location_type = 'hostel';
     }
     if (delivery_info !== undefined) update.delivery_info = delivery_info;
     update.university = fixedUniversity;
@@ -436,7 +496,35 @@ router.put('/profile', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── POST /api/auth/payout-account ───────────────────────────────────────────
+// ─── Seller payout / Paystack subaccount ─────────────────────────────────────
+router.get('/payout-bank-predictions', authMiddleware, async (req, res) => {
+  try {
+    const account_number = String(req.query.account_number || '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(account_number)) return res.json({ predictions: [] });
+    const predictions = typeof getPredictedBanks === 'function' ? getPredictedBanks(account_number).slice(0, 6) : [];
+    res.json({ predictions });
+  } catch (e) {
+    res.json({ predictions: [] });
+  }
+});
+
+router.get('/payout-banks', authMiddleware, async (req, res) => {
+  try {
+    const banks = await listBanks({ country: 'nigeria', perPage: 100, page: 1 });
+    res.json({ banks: Array.isArray(banks) ? banks.filter(b => b.active !== false) : [] });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+router.get('/resolve-bank-account', authMiddleware, async (req, res) => {
+  try {
+    const account_number = String(req.query.account_number || '').replace(/\D/g, '');
+    const bank_code = String(req.query.bank_code || '').trim();
+    if (!/^\d{10}$/.test(account_number) || !bank_code) return res.status(400).json({ error: 'A 10-digit account number and bank are required' });
+    const result = await resolveBankAccount({ account_number, bank_code });
+    res.json({ account_number, bank_code, account_name: result.account_name, verified: true });
+  } catch (e) { res.status(400).json({ error: e.message || 'Could not resolve bank account' }); }
+});
+
 router.post('/payout-account', authMiddleware, async (req, res) => {
   try {
     const { bank_name, bank_code, account_number, account_name } = req.body;
@@ -446,24 +534,47 @@ router.post('/payout-account', authMiddleware, async (req, res) => {
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role !== 'seller') return res.status(403).json({ error: 'Only approved sellers can connect a payout account' });
+    if (user.seller_approval_status !== 'approved') return res.status(403).json({ error: 'Your seller account must be approved before connecting a payout account' });
 
-    user.bank_name = bank_name.trim();
-    user.bank_code = bank_code.trim();
-    user.account_number = account_number.trim();
-    user.account_name = account_name.trim();
-    user.payout_status = 'not_configured';
-    user.payout_error = '';
+    const resolved = await resolveBankAccount({ account_number: String(account_number).trim(), bank_code: String(bank_code).trim() });
+    const resolvedName = String(resolved.account_name || '').trim();
+    if (!resolvedName) return res.status(400).json({ error: 'Paystack could not verify this account' });
 
-    await user.save();
-    res.json({
-      success: true,
-      payout_status: user.payout_status,
-      bank_name: user.bank_name,
-      bank_code: user.bank_code,
-      account_number: user.account_number,
-      account_name: user.account_name,
+    // IMPORTANT: Bixcart keeps the buyer's money in the main Paystack account while escrow is held.
+    // The seller is therefore registered as a transfer recipient, not a checkout split subaccount.
+    const recipient = await createTransferRecipient({
+      type: 'nuban',
+      name: resolvedName,
+      account_number: String(account_number).trim(),
+      bank_code: String(bank_code).trim(),
+      currency: 'NGN',
+      email: user.email,
+      description: `Bixcart seller payout account for ${user.full_name}`.slice(0, 200),
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    user.bank_name = String(bank_name).trim();
+    user.bank_code = String(bank_code).trim();
+    user.account_number = String(account_number).trim();
+    user.account_name = resolvedName;
+    user.payout_recipient_code = recipient.recipient_code;
+    user.paystack_subaccount_code = null;
+    user.payout_status = 'ready';
+    user.payout_error = '';
+    await user.save();
+
+    res.json({
+      success: true, payout_status: user.payout_status,
+      bank_name: user.bank_name, bank_code: user.bank_code,
+      account_number: user.account_number, account_name: user.account_name,
+      recipient_code: user.payout_recipient_code,
+    });
+  } catch (e) {
+    console.error('[payout-account]', e);
+    const user = await User.findById(req.user.id).catch(() => null);
+    if (user) { user.payout_status = 'failed'; user.payout_error = e.message || 'Could not connect payout account'; await user.save().catch(() => {}); }
+    res.status(502).json({ error: e.message || 'Could not connect payout account' });
+  }
 });
 
 // ─── PUT /api/auth/change-password ───────────────────────────────────────────

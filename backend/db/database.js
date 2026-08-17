@@ -35,6 +35,7 @@ const userSchema = new mongoose.Schema({
   account_number:   { type: String, default: '' },
   account_name:     { type: String, default: '' },
   payout_recipient_code: { type: String, default: null },
+  paystack_subaccount_code: { type: String, default: null },
   payout_status:    { type: String, default: 'not_configured', enum: ['not_configured','ready','pending','failed'] },
   payout_error:     { type: String, default: '' },
   admin_messages:   { type: [{
@@ -51,6 +52,7 @@ const userSchema = new mongoose.Schema({
   registration_complete: { type: Boolean, default: false },
   // Seller-specific public info for pickup and delivery
   business_name:   { type: String, default: '' },
+  seller_location_type: { type: String, enum: ['hostel','shop',''], default: '' },
   hostel_name:     { type: String, default: '' },
   level:           { type: String, default: '' },
   room_number:     { type: String, default: '' },
@@ -189,6 +191,8 @@ const orderSchema = new mongoose.Schema({
   platform_fee_percent:   { type: Number, default: 3 },
   platform_fee_amount:    { type: Number, default: 0 },
   seller_payout_amount:   { type: Number, default: 0 },
+  processing_fee_amount:  { type: Number, default: 0 },
+  seller_processing_fee_share: { type: Number, default: 0 },
   released_at:            { type: Date, default: null },
   delivered_at:           { type: Date, default: null },
   meetup_location:        { type: String, default: null },
@@ -246,6 +250,16 @@ const adminActionSchema = new mongoose.Schema({
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { timestamps: { createdAt: 'created_at', updatedAt: false } });
 
+const checkoutIntentSchema = new mongoose.Schema({
+  reference: { type: String, required: true, unique: true, index: true },
+  buyer_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  expected_total_kobo: { type: Number, required: true },
+  delivery_address: { type: mongoose.Schema.Types.Mixed, required: true },
+  items: { type: [mongoose.Schema.Types.Mixed], required: true },
+  expires_at: { type: Date, required: true },
+  used_at: { type: Date, default: null },
+}, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
+
 const broadcastSchema = new mongoose.Schema({
   title:            { type: String, default: '' },
   content:          { type: String, required: true },
@@ -266,6 +280,7 @@ const Message            = mongoose.model('Message',            messageSchema);
 const ConversationReport = mongoose.model('ConversationReport', conversationReportSchema);
 const Order              = mongoose.model('Order',              orderSchema);
 const Broadcast          = mongoose.model('Broadcast',          broadcastSchema);
+const CheckoutIntent     = mongoose.model('CheckoutIntent',     checkoutIntentSchema);
 
 const SELLER_COMMISSION_TIERS = [
   { level: 1, threshold: 0, commission_percent: 7.0, label: 'Starter', discount_cap: 0 },
@@ -329,6 +344,7 @@ module.exports = {
   ConversationReport,
   Order,
   Broadcast,
+  CheckoutIntent,
   AdminAction,
   SELLER_COMMISSION_TIERS,
   getSellerCommissionInfo,

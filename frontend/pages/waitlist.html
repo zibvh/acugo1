@@ -304,58 +304,6 @@ body {
 .how-step h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
 .how-step p  { font-size: 13px; color: var(--muted); line-height: 1.65; }
 
-/* ── CREDITS PROMO ── */
-.credits-promo {
-  max-width: 860px;
-  margin: 0 auto 56px;
-  padding: 0 24px;
-}
-.credits-card {
-  background: var(--ink);
-  color: white;
-  border-radius: 20px;
-  padding: 36px 32px;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 24px;
-  align-items: center;
-  position: relative;
-  overflow: hidden;
-}
-.credits-card::after {
-  content: '🎁';
-  position: absolute;
-  right: -20px;
-  top: -20px;
-  font-size: 120px;
-  opacity: .06;
-  pointer-events: none;
-  line-height: 1;
-}
-.credits-card h3 {
-  font-family: 'Raleway', sans-serif;
-  font-size: 26px;
-  font-weight: 900;
-  letter-spacing: -.5px;
-  margin-bottom: 8px;
-}
-.credits-card h3 span { color: #f4a57b; }
-.credits-card p { font-size: 14px; color: rgba(255,255,255,.6); line-height: 1.7; max-width: 440px; }
-.credits-join-btn {
-  padding: 14px 28px;
-  background: var(--orange);
-  color: white;
-  border-radius: 99px;
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-  border: none;
-  font-family: 'Nunito', sans-serif;
-  transition: background .15s;
-  white-space: nowrap;
-}
-.credits-join-btn:hover { background: #b04422; }
-
 /* ── FOOTER ── */
 .footer-strip {
   border-top: 1.5px solid var(--border);
@@ -415,10 +363,10 @@ body {
           required
           autocomplete="email"
         >
-        <button class="form-btn" type="submit" id="wl-btn">Get 6 free listings →</button>
+        <button class="form-btn" type="submit" id="wl-btn">Join the waitlist →</button>
       </form>
       <p class="form-error" id="wl-error"></p>
-      <p class="form-note">Drop your email. When you sign up as a seller, you get 6 free listing credits automatically. No code, no hassle.</p>
+      <p class="form-note">Drop your email and we'll keep you updated as Bixcart opens up.</p>
     </div>
 
     <div class="success-box" id="wl-success">
@@ -426,7 +374,7 @@ body {
       <h3>You're in!</h3>
       <p>
         When you create your <strong>seller account</strong> using this email,
-        your <strong>6 free listing credits</strong> will already be there waiting.
+        you'll be among the first to hear about Bixcart updates.
         No code. Nothing extra.
       </p>
       <a href="auth.html?mode=register" class="success-btn">Create my account now</a>
@@ -499,20 +447,7 @@ body {
 </section>
 
 <!-- CREDITS PROMO -->
-<section class="credits-promo">
-  <div class="credits-card">
-    <div>
-      <h3>First 50 sellers get <span>6 free listings.</span></h3>
-      <p>
-        Normally a listing costs ₦500. The first 50 people to sign up as sellers get 6 credits for free —
-        that's ₦3,000 worth of listings on us. Just to say thank you for being early.
-      </p>
-    </div>
-    <button class="credits-join-btn" onclick="document.getElementById('wl-email').focus();window.scrollTo({top:0,behavior:'smooth'})">
-      Claim my spot
-    </button>
-  </div>
-</section>
+
 
 <!-- FOOTER -->
 <div class="footer-strip">
@@ -551,7 +486,7 @@ async function joinWaitlist(e) {
   } catch(err) {
     errEl.textContent   = err.message;
     btn.disabled        = false;
-    btn.textContent     = 'Get 6 free listings →';
+    btn.textContent     = 'Join the waitlist →';
   }
 }
 </script>

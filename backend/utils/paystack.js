@@ -23,15 +23,53 @@ async function paystackRequest(path, options = {}) {
 }
 
 
-async function verifyTransaction(reference) {
-  return paystackRequest(`/transaction/verify/${encodeURIComponent(reference)}`, { method: 'GET' });
+async function listBanks({ country = 'nigeria', perPage = 100, page = 1 } = {}) {
+  const params = new URLSearchParams({ country, perPage: String(perPage), page: String(page) });
+  return paystackRequest(`/bank?${params.toString()}`, { method: 'GET' });
 }
 
-async function createTransferRecipient({ name, account_number, bank_code, currency = 'NGN' }) {
+async function resolveBankAccount({ account_number, bank_code, currency = 'NGN' }) {
+  const params = new URLSearchParams({ account_number, bank_code, currency });
+  return paystackRequest(`/bank/resolve?${params.toString()}`, { method: 'GET' });
+}
+
+async function createSubaccount({ business_name, bank_code, account_number, percentage_charge = 0, description = '', primary_contact_email = '', primary_contact_name = '', primary_contact_phone = '' }) {
+  return paystackRequest('/subaccount', {
+    method: 'POST',
+    body: JSON.stringify({
+      business_name, bank_code, account_number, percentage_charge,
+      description, primary_contact_email, primary_contact_name, primary_contact_phone,
+    }),
+  });
+}
+
+async function createTransferRecipient({ type = 'nuban', name, account_number, bank_code, currency = 'NGN', email = '', description = '' }) {
   return paystackRequest('/transferrecipient', {
     method: 'POST',
-    body: JSON.stringify({ type: 'nuban', name, account_number, bank_code, currency }),
+    body: JSON.stringify({ type, name, account_number, bank_code, currency, email, description }),
   });
+}
+
+async function initiateTransfer({ source = 'balance', amount, recipient, reference, reason = '', currency = 'NGN' }) {
+  return paystackRequest('/transfer', {
+    method: 'POST',
+    body: JSON.stringify({ source, amount: Math.round(Number(amount) * 100), recipient, reference, reason, currency }),
+  });
+}
+
+async function verifyTransfer(reference) {
+  return paystackRequest(`/transfer/verify/${encodeURIComponent(reference)}`, { method: 'GET' });
+}
+
+async function initializeTransaction(payload) {
+  return paystackRequest('/transaction/initialize', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+async function verifyTransaction(reference) {
+  return paystackRequest(`/transaction/verify/${encodeURIComponent(reference)}`, { method: 'GET' });
 }
 
 async function createRefund({ transaction, amount, customer_note = '', merchant_note = '' }) {
@@ -57,24 +95,17 @@ async function getRefund(refundId) {
   return paystackRequest(`/refund/${encodeURIComponent(refundId)}`, { method: 'GET' });
 }
 
-async function initiateTransfer({ amount, recipient, reason = 'Marketplace payout' }) {
-  return paystackRequest('/transfer', {
-    method: 'POST',
-    body: JSON.stringify({
-      source: 'balance',
-      amount: Math.round(Number(amount || 0) * 100),
-      recipient,
-      reason,
-    }),
-  });
-}
-
 module.exports = {
   paystackRequest,
-  createTransferRecipient,
-  initiateTransfer,
   createRefund,
   listRefunds,
   getRefund,
   verifyTransaction,
+  listBanks,
+  resolveBankAccount,
+  createSubaccount,
+  createTransferRecipient,
+  initiateTransfer,
+  verifyTransfer,
+  initializeTransaction,
 };

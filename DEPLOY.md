@@ -268,3 +268,22 @@ npm install web-push
 - Notifications only fire if `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are set; otherwise they fail silently.
 - The service worker (`frontend/sw.js`) must be served from the root (`/sw.js`).
 - `web-push` is an optional dependency — if not installed, notifications are simply skipped.
+
+## Paystack marketplace split setup (Bixcart)
+
+Bixcart now uses Paystack subaccounts and server-controlled dynamic splits for seller payments. You do **not** need to manually create a split group for each commission tier; the backend creates the split configuration per checkout.
+
+Add these Render environment variables:
+
+- `PAYSTACK_PUBLIC_KEY` — your Paystack public key (still used by other payment surfaces).
+- `PAYSTACK_SECRET_KEY` — your Paystack secret key. **Backend only; never expose it to the frontend.**
+- `PUBLIC_APP_URL` — your public Bixcart URL, e.g. `https://bixcart.onrender.com`.
+
+The Paystack integration uses:
+
+- One Paystack subaccount per approved seller payout account.
+- Dynamic **flat** seller shares so each seller's exact 7% → 5.5% Bixcart commission can be respected even when a cart contains multiple sellers.
+- `bearer_type: "all"`, so Paystack transaction fees are shared equally between the Bixcart main account and the participating seller subaccounts.
+- Server-side payment initialization and verification; the browser cannot change the commission/split configuration.
+
+Before going live, keep Paystack in Test Mode and test seller bank setup, one-seller checkout, multi-seller checkout, seller decline/refund, automatic timeout/refund, and successful delivery confirmation.

@@ -21,6 +21,7 @@
     "web-push": "^3.6.7",
     "nodemailer": "^6.9.14",
     "express-rate-limit": "^7.4.1",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "nuban-prediction": "^1.2.0"
   }
 }

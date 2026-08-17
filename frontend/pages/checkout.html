@@ -49,6 +49,18 @@
 
   async function init() {
     try {
+      const params = new URLSearchParams(window.location.search);
+      const returnedReference = params.get('reference') || params.get('trxref');
+      if (params.get('payment') === 'success' && returnedReference) {
+        document.getElementById('checkout-content').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">${icons.loader}</div>
+            <h3>Confirming your payment…</h3>
+            <p>Please wait while Bixcart verifies your Paystack payment.</p>
+          </div>`;
+        await finalizeOrder(returnedReference);
+        return;
+      }
       items = (await cart.list()).filter(i => i.status === 'active');
       if (!items.length) {
         document.getElementById('checkout-content').innerHTML = `
@@ -135,6 +147,26 @@
     };
   }
 
+  async function finalizeOrder(reference) {
+    try {
+      const result = await api.post('/orders/checkout', { payment_reference: reference });
+      await cart.clear().catch(() => {});
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+      showConfirmation(result);
+    } catch (e) {
+      document.getElementById('checkout-content').innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon" style="background:var(--red-bg);color:var(--red);">${icons.alertCircle || icons.x}</div>
+          <h3>We couldn't confirm your payment</h3>
+          <p>${e.message || 'Please contact Bixcart support with your Paystack reference: ' + reference}</p>
+          <button class="btn btn-accent" onclick="location.reload()">Try again</button>
+        </div>`;
+    } finally {
+      paying = false;
+    }
+  }
+
   async function payNow() {
     if (paying) return;
     const delivery_address = validateForm();
@@ -143,58 +175,17 @@
     const user = auth.getUser();
     if (!user?.email) { toast('Please log in again', 'error'); return; }
 
-    let paystackPublicKey;
-    try {
-      const keyRes = await api.get('/auth/paystack-public-key', false);
-      paystackPublicKey = keyRes.publicKey;
-    } catch (e) {
-      toast('Payment gateway not configured — contact support', 'error');
-      return;
-    }
-
-    async function finalizeOrder(reference) {
-      toast('Payment received! Placing your order…', 'success');
-      try {
-        const result = await api.post('/orders/checkout', { delivery_address, payment_reference: reference });
-        await cart.clear().catch(() => {}); // local badge cleanup; server already cleared the cart
-        showConfirmation(result);
-      } catch (e) {
-        toast(e.message || 'Payment succeeded but placing the order failed — contact support with reference ' + reference, 'error');
-      } finally {
-        paying = false;
-      }
-    }
-
-    function launchPaystack() {
-      const ref = 'bixcart_order_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-      const handler = PaystackPop.setup({
-        key: paystackPublicKey,
-        email: user.email,
-        amount: subtotal * 100,
-        currency: 'NGN',
-        ref,
-        metadata: { item_count: items.length, user_id: user.id || user._id },
-        callback: (response) => finalizeOrder(response.reference),
-        onClose: () => { paying = false; },
-      });
-      handler.openIframe();
-    }
-
     paying = true;
     const btn = document.getElementById('pay-btn');
-    if (btn) btn.disabled = true;
+    if (btn) { btn.disabled = true; btn.innerHTML = icons.loader + ' Preparing secure payment…'; }
     try {
-      if (typeof PaystackPop === 'undefined') {
-        const script = document.createElement('script');
-        script.src = 'https://js.paystack.co/v1/inline.js';
-        script.onload = launchPaystack;
-        script.onerror = () => { toast('Could not load payment gateway', 'error'); paying = false; };
-        document.head.appendChild(script);
-      } else {
-        launchPaystack();
-      }
-    } finally {
-      if (btn) btn.disabled = false;
+      const result = await api.post('/orders/initialize-payment', { delivery_address });
+      if (!result.authorization_url) throw new Error('Paystack did not return a payment link');
+      window.location.href = result.authorization_url;
+    } catch (e) {
+      toast(e.message || 'Could not start payment', 'error');
+      paying = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = icons.creditCard + ' Pay ' + formatPrice(subtotal); }
     }
   }
 

@@ -22,7 +22,7 @@ The Bixcart marketplace now enforces a complete escrow-based transaction lifecyc
 
 4. Seller's listing:
    - Moves from `status='active'` → `status='pending'` (hidden from marketplace)
-   - Funds held in escrow (Paystack holds payment)
+   - Funds remain under Bixcart's escrow control in the Bixcart/Paystack merchant flow; seller payout is NOT initiated at checkout
 
 5. **Seller receives notifications:**
    - Push notification: "Payment held in escrow — fulfill within deadline"
@@ -129,10 +129,11 @@ Body: { code: "XXXX-XXXX" }
 1. Escrow released: `escrow_status = 'released'`
 2. Order status → `'completed'`
 3. Listing status → `'sold'`
-4. Payout queued:
-   - Platform fee (3% + ₦300) deducted
-   - Seller payout transferred via Paystack
-   - Seller sees funds in bank within 24–48 hours
+4. Payout initiated:
+   - Bixcart commission (seller's current 7%→5.5% tier) is deducted
+   - Paystack processing fee is calculated from the verified transaction and shared 50/50 between Bixcart and seller
+   - Seller's remaining entitlement is transferred to the seller's verified Paystack transfer recipient
+   - The seller is notified when the transfer is initiated
 
 5. Seller notified: "Escrow released! Payout of ₦X sent to your bank"
 6. Chat prompt: "Rate this transaction"
@@ -194,10 +195,12 @@ Seller selects when creating listing:
 **Listing Creation:** FREE
 
 **When Item Sells:**
-- Platform fee: **3% + ₦300**
+- Bixcart commission: **7% → 5.5%**, based on the seller's permanent successful-sales tier
+- Paystack processing fee: **shared 50/50 between Bixcart and seller**
 - Example: Item sells for ₦10,000
-  - Platform keeps: (10,000 × 0.03) + 300 = ₦600
-  - Seller receives: ₦9,400
+  - Bixcart commission depends on the seller's tier
+  - The verified Paystack processing fee is split 50/50
+  - Seller receives the remaining amount only after escrow is released
   - Buyer pays: ₦10,000 (no extra fee)
 
 ---
@@ -240,7 +243,7 @@ Seller selects when creating listing:
 - Status: `'cancelled'`
 - Listing: Re-enabled
 - Buyer: Auto-refunded
-- Seller: No payout (funds returned to buyer)
+- Seller: No payout is initiated
 
 ### Invalid Verification Code
 - Buyer enters wrong code
@@ -304,5 +307,5 @@ GET    /api/admin/*                         Dispute & escrow management
 ---
 
 **Document Version:** 1.0  
-**Last Updated:** Current Session  
+**Last Updated:** August 17, 2026  
 **System Status:** Ready for QA testing
