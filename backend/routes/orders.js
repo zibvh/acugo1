@@ -341,7 +341,23 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 
     const transaction = await verifyTransaction(payment_reference);
     if (!transaction || transaction.status !== 'success') return res.status(400).json({ error: 'Payment not verified' });
-    if (Number(transaction.amount || 0) !== Number(intent.expected_total_kobo)) {
+
+    // Paystack can return both `amount` (the amount actually charged) and
+    // `requested_amount` (the amount Bixcart asked Paystack to charge).
+    // For a normal Bixcart checkout, our security check must compare the
+    // requested amount to the immutable CheckoutIntent total. Using only
+    // `transaction.amount` can reject a legitimate payment when Paystack's
+    // final charged amount differs from the requested amount (for example,
+    // in payment flows where Paystack adjusts the charged amount).
+    const verifiedRequestedKobo = Number(transaction.requested_amount ?? transaction.amount ?? 0);
+    const expectedKobo = Number(intent.expected_total_kobo || 0);
+    if (!Number.isFinite(verifiedRequestedKobo) || verifiedRequestedKobo !== expectedKobo) {
+      console.error('[checkout] Payment amount mismatch', {
+        reference: payment_reference,
+        expected_kobo: expectedKobo,
+        requested_kobo: transaction.requested_amount,
+        charged_kobo: transaction.amount,
+      });
       return res.status(400).json({ error: 'Payment amount does not match the checkout total' });
     }
 

@@ -690,6 +690,7 @@ body {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9"/><path d="M20 12h-9"/><path d="M20 17h-9"/><circle cx="5" cy="7" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="5" cy="17" r="2"/></svg>
       Seller Approvals
     </button>
+    <button class="admin-nav-item" data-tab="deletion-requests">Account Deletions</button>
     <button class="admin-nav-item" data-tab="actions">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-6"/></svg>
       Admin Actions
@@ -812,7 +813,7 @@ api.patch = (path, body) => api.request('PATCH', path, body, true);
 function adminLogout() { adminAuth.clear(); window.location.replace('admin-login.html'); }
 
 // ── Tab routing ─────────────────────────────────────────────────────────────
-const TABS = { overview: 'Overview', 'seller-approvals': 'Seller Approvals', actions: 'Admin Actions', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
+const TABS = { overview: 'Overview', 'seller-approvals': 'Seller Approvals', 'deletion-requests': 'Account Deletions', actions: 'Admin Actions', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
 let currentTab = 'overview';
 
 document.querySelectorAll('.admin-nav-item[data-tab]').forEach(btn => {
@@ -851,6 +852,7 @@ function switchTab(tab) {
   content.innerHTML = '<div class="admin-empty">Loading…</div>';
   if (tab === 'overview')  renderOverview();
   if (tab === 'seller-approvals') renderSellerApprovals();
+  if (tab === 'deletion-requests') renderDeletionRequests();
   if (tab === 'actions') renderAdminActions();
   if (tab === 'users')     renderUsers();
   if (tab === 'listings')  renderListings();
@@ -878,8 +880,24 @@ async function renderSellerApprovals() {
         <td>${escHtml(u.level || '—')}<br>${escHtml(u.hostel_name || '—')} · ${escHtml(u.room_number || '—')}</td>
         <td>${escHtml(u.id_type === 'school_id' ? 'ACU School ID' : 'NIN')}<br><a href="${escHtml(u.id_front_url || '#')}" target="_blank" rel="noopener">Front</a> · <a href="${escHtml(u.id_back_url || '#')}" target="_blank" rel="noopener">Back</a></td>
         <td>${fmtTime(u.seller_approval_requested_at)}</td>
-        <td style="white-space:nowrap;"><button class="btn btn-primary btn-sm" data-approve-seller="${u.id}">Approve</button> <button class="btn btn-ghost btn-sm" data-reject-seller="${u.id}">Reject</button></td>
+        <td style="white-space:nowrap;"><button class="btn btn-surface btn-sm" data-view-seller="${u.id}">View details</button> <button class="btn btn-primary btn-sm" data-approve-seller="${u.id}">Approve</button> <button class="btn btn-ghost btn-sm" data-reject-seller="${u.id}">Reject</button></td>
       </tr>`).join('')}</tbody></table></div>` : '<div class="admin-empty">No pending seller applications.</div>'}`;
+    c.querySelectorAll('[data-view-seller]').forEach(btn => btn.addEventListener('click', () => {
+      const u = sellers.find(x => String(x.id) === String(btn.dataset.viewSeller));
+      if (!u) return;
+      const idLabel = u.id_type === 'school_id' ? 'ACU School ID' : 'NIN';
+      showDrawer(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><div><div class="section-kicker">Seller registration</div><h2 style="margin:4px 0 0;font-size:24px;">${escHtml(u.full_name)}</h2></div><button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button></div>
+        <div style="display:grid;gap:14px;">
+          <div><strong>Email</strong><div>${escHtml(u.email)}</div></div>
+          <div><strong>Level</strong><div>${escHtml(u.level || '—')}</div></div>
+          <div><strong>Seller location</strong><div>${escHtml(u.seller_location_type || '—')}</div></div>
+          ${u.seller_location_type === 'hostel' ? `<div><strong>Hostel / Room</strong><div>${escHtml(u.hostel_name || '—')} · ${escHtml(u.room_number || '—')}</div></div>` : ''}
+          ${u.seller_location_type === 'shop' ? `<div><strong>Shop</strong><div>${escHtml(u.shop_name || '—')} · ${escHtml(u.shop_number || '—')}<br>${escHtml(u.shop_address || '—')}</div></div>` : ''}
+          <div><strong>Delivery information</strong><div>${escHtml(u.delivery_info || '—')}</div></div>
+          <div><strong>ID verification</strong><div>${idLabel}</div><div style="display:flex;gap:10px;margin-top:8px;">${u.id_front_url ? `<a class="btn btn-surface btn-sm" href="${escHtml(u.id_front_url)}" target="_blank" rel="noopener">View front</a>` : ''}${u.id_back_url ? `<a class="btn btn-surface btn-sm" href="${escHtml(u.id_back_url)}" target="_blank" rel="noopener">View back</a>` : ''}</div></div>
+          <div><strong>Registration submitted</strong><div>${fmtTime(u.seller_approval_requested_at)}</div></div>
+        </div>`);
+    }));
     c.querySelectorAll('[data-approve-seller]').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('Approve this seller? They will be able to use the seller account immediately.')) return;
       btn.disabled = true;
@@ -893,6 +911,24 @@ async function renderSellerApprovals() {
       }});
     }));
   } catch(e) { c.innerHTML = `<div class="admin-empty">Failed to load seller applications: ${escHtml(e.message)}</div>`; }
+}
+
+async function renderDeletionRequests() {
+  const c = document.getElementById('admin-content');
+  c.innerHTML = '<div class="admin-empty">Loading deletion requests…</div>';
+  try {
+    const data = await api.get('/admin/deletion-requests?status=pending');
+    const users = data.users || [];
+    c.innerHTML = `<div style="margin-bottom:18px;"><div class="section-kicker">Account management</div><h2 style="font-size:28px;margin-top:6px;">Account deletion requests</h2><p style="color:var(--ink-3);font-size:13px;">Review the user's reason, ratings, warnings and history before approving deletion. Approved accounts are disabled while their data is retained for one year.</p></div>
+      ${users.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>User</th><th>Reason</th><th>Rating</th><th>Warnings</th><th>Requested</th><th>Action</th></tr></thead><tbody>${users.map(u => `<tr><td><strong>${escHtml(u.full_name)}</strong><br><span style="font-size:12px;color:var(--ink-3);">${escHtml(u.email)}</span></td><td style="max-width:280px;white-space:normal;">${escHtml(u.deletion_reason)}</td><td>${Number(u.rating || 0).toFixed(1)} (${u.rating_count || 0})</td><td>${u.warned_at ? escHtml(u.warn_reason || 'Warned') : 'None'}</td><td>${fmtTime(u.deletion_requested_at)}</td><td style="white-space:nowrap;"><button class="btn btn-primary btn-sm" data-approve-delete="${u.id}">Approve</button> <button class="btn btn-ghost btn-sm" data-reject-delete="${u.id}">Reject</button> <button class="btn btn-surface btn-sm" data-view-delete-user="${u.id}">View</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="admin-empty">No pending account deletion requests.</div>'}`;
+    c.querySelectorAll('[data-approve-delete]').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm('Approve this account deletion? The account will be disabled and its data retained for one year.')) return;
+      btn.disabled = true;
+      try { await api.post(`/admin/deletion-requests/${btn.dataset.approveDelete}/approve`, {}); toast('Account deletion approved.', 'success'); renderDeletionRequests(); } catch(e) { toast(e.message,'error'); btn.disabled=false; }
+    }));
+    c.querySelectorAll('[data-reject-delete]').forEach(btn => btn.addEventListener('click', () => showModal({ title:'Reject deletion request', sub:'Give the user a reason why their deletion request was rejected.', placeholder:'Reason for rejecting this request…', confirmLabel:'Reject request', confirmClass:'btn-primary', onConfirm: async reason => { try { await api.post(`/admin/deletion-requests/${btn.dataset.rejectDelete}/reject`, { reason }); toast('Deletion request rejected.','success'); renderDeletionRequests(); } catch(e) { toast(e.message,'error'); } } })));
+    c.querySelectorAll('[data-view-delete-user]').forEach(btn => btn.addEventListener('click', async () => { try { const u = await api.get(`/admin/users/${btn.dataset.viewDeleteUser}`); showDrawer(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><div><div class="section-kicker">User history</div><h2 style="margin:4px 0 0;font-size:24px;">${escHtml(u.full_name)}</h2></div><button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button></div><div style="display:grid;gap:16px;"><div><strong>Deletion reason</strong><p>${escHtml(u.deletion_reason || '—')}</p></div><div><strong>Rating</strong><p>${Number(u.rating||0).toFixed(1)} from ${u.rating_count||0} rating(s)</p></div><div><strong>Warnings / status</strong><p>${escHtml(u.warn_reason || 'No warning')} · ${escHtml(u.account_status)}</p></div><div><strong>Admin actions</strong><div style="display:grid;gap:8px;">${(u.admin_actions||[]).map(a => `<div style="padding:10px;border:1px solid var(--border);border-radius:10px;"><strong>${escHtml(a.action)}</strong> · ${fmtTime(a.created_at)}<br><span style="font-size:12px;color:var(--ink-3);">${escHtml(a.reason||'')}</span></div>`).join('') || 'None'}</div></div><div><strong>User activity</strong><div style="display:grid;gap:8px;max-height:300px;overflow:auto;">${(u.user_activities||[]).map(a => `<div style="padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;"><strong>${escHtml(a.action)}</strong><br><span style="color:var(--ink-3);">${fmtTime(a.created_at)} · ${a.status_code || ''}</span></div>`).join('') || 'None'}</div></div><div><strong>Ratings received</strong><div>${(u.ratings_received||[]).map(r => `<div style="padding:8px 0;border-bottom:1px solid var(--border);">${r.buyer_rating}/5 — ${escHtml(r.buyer_review||'No written review')}</div>`).join('') || 'None'}</div></div></div>`); } catch(e) { toast(e.message,'error'); } }));
+  } catch(e) { c.innerHTML = `<div class="admin-empty">Failed to load deletion requests: ${escHtml(e.message)}</div>`; }
 }
 
 async function renderAdminActions() {

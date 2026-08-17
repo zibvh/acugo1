@@ -148,12 +148,12 @@
     <div class="settings-grid-2" style="margin-bottom:16px;">
       <div class="form-group">
         <label class="form-label">Account number</label>
-        <input class="form-input" id="p-account-number" inputmode="numeric" maxlength="10" placeholder="10-digit account number" autocomplete="off">
+        <input class="form-input" id="p-account-number" name="bixcart-bank-account-number" inputmode="numeric" maxlength="10" placeholder="10-digit account number" autocomplete="off" autocapitalize="off" spellcheck="false">
         <span class="form-hint" id="p-bank-hint">Enter your account number to suggest matching banks.</span>
       </div>
       <div class="form-group">
         <label class="form-label">Bank</label>
-        <select class="form-select" id="p-bank">
+        <select class="form-select" id="p-bank" name="bixcart-bank-name" autocomplete="off">
           <option value="">Select bank</option>
         </select>
         <span class="form-hint">The suggested bank is only a prediction. Paystack performs the final verification.</span>
@@ -162,7 +162,7 @@
 
     <div class="form-group" style="margin-bottom:16px;">
       <label class="form-label">Account name</label>
-      <input class="form-input" id="p-account-name" readonly placeholder="Will be verified automatically">
+      <input class="form-input" id="p-account-name" name="bixcart-bank-account-name" readonly placeholder="Will be verified automatically" autocomplete="off">
       <span class="form-hint" id="p-account-status"></span>
     </div>
 
@@ -195,6 +195,13 @@
   </div>
 
   <!-- Account -->
+  <div class="settings-section" id="delete-account-section">
+    <h2>Delete account</h2>
+    <div class="section-sub">You can request account deletion. An administrator must approve the request. If approved, your account is disabled while Bixcart retains the associated data for one year before final removal.</div>
+    <div id="deletion-status" style="font-size:13px;color:var(--ink-3);margin-bottom:12px;"></div>
+    <button class="btn btn-ghost" id="request-delete-btn" style="color:var(--red);border-color:var(--red);">Request account deletion</button>
+  </div>
+
   <div class="settings-section">
     <h2>Account</h2>
     <div class="section-sub">Sign out of Bixcart on this device.</div>
@@ -456,12 +463,41 @@
     btn.disabled = false; btn.innerHTML = 'Update password';
   });
 
+  async function setupDeletionUI() {
+    const status = document.getElementById('deletion-status');
+    const btn = document.getElementById('request-delete-btn');
+    if (!status || !btn) return;
+    try {
+      const u = await api.get('/auth/deletion-status');
+      if (u.account_status === 'deletion_pending') {
+        status.textContent = 'Your deletion request is awaiting admin approval.';
+        btn.disabled = true; btn.textContent = 'Deletion request pending';
+      } else if (u.account_status === 'deleted') {
+        status.textContent = u.deletion_retention_until ? `Deletion approved. Your data is retained until ${new Date(u.deletion_retention_until).toLocaleDateString('en-NG')}.` : 'Deletion approved.';
+        btn.disabled = true; btn.textContent = 'Account deletion approved';
+      }
+    } catch (_) {}
+    btn.addEventListener('click', async () => {
+      const reason = prompt('Why do you want to delete your Bixcart account?');
+      if (reason === null) return;
+      if (reason.trim().length < 10) { toast('Please provide at least 10 characters explaining your reason.', 'error'); return; }
+      btn.disabled = true;
+      try {
+        await api.post('/auth/request-deletion', { reason: reason.trim() });
+        status.textContent = 'Your deletion request has been submitted and is awaiting admin approval.';
+        btn.textContent = 'Deletion request pending';
+        toast('Deletion request submitted.', 'success');
+      } catch (e) { btn.disabled = false; toast(e.message, 'error'); }
+    });
+  }
+
   document.getElementById('logout-btn').addEventListener('click', () => {
     auth.clear();
     window.location.href = '/';
   });
 
   loadSettings();
+  setupDeletionUI();
 </script>
 </body>
 </html>

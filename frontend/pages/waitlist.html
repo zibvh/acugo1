@@ -464,7 +464,7 @@ async function joinWaitlist(e) {
   errEl.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Saving your spot…';
-// hhh
+
   try {
     const res  = await fetch('/api/auth/waitlist', {
       method:  'POST',

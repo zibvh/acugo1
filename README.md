@@ -6,9 +6,9 @@ A student marketplace for Ajayi Crowther University (and built to extend to othe
 
 - **Backend**: Node.js + Express + MongoDB (Mongoose)
 - **Frontend**: Vanilla HTML/CSS/JS — no build step
-- **Auth**: JWT + bcrypt, `.edu`-style university email verification
+- **Auth**: JWT + bcrypt, email verification (any valid email address)
 - **Images**: Cloudinary (upload) + Multer (handling)
-- **Payments**: Paystack (checkout + seller listing-credit purchases)
+- **Payments**: Paystack (checkout, escrow refunds, and seller payouts after escrow release)
 - **Email**: Brevo API (verification, password reset)
 - **Push**: Web Push (VAPID)
 - **AI moderation**: Gemini, flags listings/conversations for admin review
@@ -141,6 +141,18 @@ acugo/
 
 The older path — message a seller directly, negotiate, agree to meet up in person — still works and shows up under **Seller Dashboard → Transactions**. Nothing about it changed; cart checkout was added alongside it, not in place of it.
 
+## Current marketplace business model
+
+- Product listings are **free**. There is no payment per listing and no listing-credit purchase requirement.
+- Listings remain active for the configured listing period (currently 3 months / the applicable semester model) and can be renewed without a listing fee.
+- Bixcart earns a commission only from successfully completed marketplace sales.
+- Seller commission starts at **7%** and can permanently decrease through successful-sale tiers down to a **5.5% floor**.
+- Buyer payments are held in Bixcart's escrow workflow. Seller payout is not released at checkout.
+- If an order is declined, cancelled, or automatically cancelled because a seller misses the response/delivery deadline, Bixcart initiates a refund and notifies the buyer.
+- When escrow is successfully released, the seller's entitlement is paid to the seller's verified Paystack payout recipient. Bixcart and the seller share the applicable Paystack processing fee.
+- Sellers must be approved by an admin before seller functionality is enabled.
+- Sellers must choose **exactly one** location mode: hostel (hostel + room) **or** shop (shop name/number/address). They cannot use both at the same time.
+
 ## API Endpoints
 
 ### Auth (`/api/auth`)
@@ -154,7 +166,7 @@ The older path — message a seller directly, negotiate, agree to meet up in per
 | GET | `/me` | ✓ | Current user |
 | PUT | `/profile` / `/complete-registration` / `/change-password` | ✓ | Update account |
 | GET | `/paystack-public-key` / `/vapid-public-key` | — | Public keys for frontend |
-| POST | `/credits/verify` | ✓ | Verify a Paystack payment, credit listing credits |
+| POST | `/credits/verify` | ✓ | Legacy listing-credit verification endpoint (not used for current free listings) |
 | GET | `/users/:id/profile` | — | Public profile |
 
 ### Listings (`/api/listings`)
@@ -163,7 +175,7 @@ The older path — message a seller directly, negotiate, agree to meet up in per
 | GET | `/` | optional | Search + filter (`q`, `category`, `campus`, `condition`, `min_price`, `max_price`, `sort`, `page`, `limit`) |
 | GET | `/:id` | optional | Listing detail |
 | GET | `/user/:userId` | — | A user's listings |
-| POST | `/` | ✓ | Create listing (costs a listing credit) |
+| POST | `/` | ✓ | Create listing (listings are free) |
 | PUT | `/:id` | ✓ | Update listing |
 | DELETE | `/:id` | ✓ | Delete listing |
 | POST | `/:id/save` | ✓ | Toggle save |
@@ -207,7 +219,7 @@ The older path — message a seller directly, negotiate, agree to meet up in per
 
 ## Features
 
-- University email verification at registration
+- Email verification at registration (any valid email address)
 - Listings — create, edit, delete, search, filter, sort, paginate, AI-moderated
 - Cart + checkout — multi-item, multi-seller, paid upfront via Paystack, delivery address
 - Legacy path — message a seller directly, make an offer, arrange a meetup
@@ -225,5 +237,6 @@ The older path — message a seller directly, negotiate, agree to meet up in per
 - `JWT_SECRET` should be a long random string in production (Render's blueprint auto-generates one — see `render.yaml`).
 - Rate limiting (`express-rate-limit`) is already a dependency — confirm it's applied to the routes that need it (auth, checkout) before going live.
 - See `DEPLOY.md` for the full deployment walkthrough.
-#   a c u g o 1  
+#   a c u g o 1 
+ 
  

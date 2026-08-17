@@ -43,7 +43,7 @@ function sellerApprovalMiddleware(req, res, next) {
       const { User } = require('../db/database');
       const user = await User.findById(req.user.id).select('seller_approval_status account_status').lean();
       if (!user) return res.status(404).json({ error: 'User not found' });
-      if (user.account_status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+      if (['suspended','deletion_pending','deleted'].includes(user.account_status)) return res.status(403).json({ code: 'ACCOUNT_UNAVAILABLE', error: user.account_status === 'deletion_pending' ? 'Your account deletion request is awaiting admin approval.' : 'Your account is unavailable.' });
       if (user.seller_approval_status === 'pending') return res.status(403).json({ code: 'SELLER_APPROVAL_PENDING', error: 'Your seller account is awaiting admin approval. Please allow up to 6 hours.' });
       if (user.seller_approval_status === 'rejected') return res.status(403).json({ code: 'SELLER_APPROVAL_REJECTED', error: 'Your seller application was rejected.' });
       next();

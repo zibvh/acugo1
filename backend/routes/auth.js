@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const express    = require('express');
 const router     = express.Router();
 const bcrypt     = require('bcryptjs');
@@ -45,6 +46,9 @@ function safeUser(u) {
   delete obj.email_verify_expires;
   delete obj.password_reset_token;
   delete obj.password_reset_expires;
+  // Never expose Paystack payout recipient identifiers to the browser. These are backend-only.
+  delete obj.payout_recipient_code;
+  delete obj.paystack_subaccount_code;
   obj.id = obj._id;
   return obj;
 }
@@ -93,16 +97,6 @@ router.post('/register', authLimiter, async (req, res) => {
     const verifyToken   = randomToken();
     const verifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
 
-    // First 50 sellers OR waitlisted emails get 6 free listing credits
-    let listingCredits = 0;
-    if (role === 'seller') {
-      const [sellerCount, onWaitlist] = await Promise.all([
-        User.countDocuments({ role: 'seller' }),
-        Waitlist.findOne({ email: email.toLowerCase() }).lean(),
-      ]);
-      listingCredits = (sellerCount < 50 || onWaitlist) ? 6 : 1;
-    }
-
     const user = await User.create({
       email: normalizedEmail,
       full_name,
@@ -110,7 +104,6 @@ router.post('/register', authLimiter, async (req, res) => {
       seller_approval_status: role === 'seller' ? 'pending' : 'approved',
       seller_approval_reason: '',
       password_hash:         bcrypt.hashSync(password, 12),
-      listing_credits:       listingCredits,
       registration_complete: false,
       email_verified:        false,
       email_verify_token:    verifyToken,
@@ -146,8 +139,10 @@ router.post('/login', authLimiter, async (req, res) => {
     if (!user || !bcrypt.compareSync(password, user.password_hash))
       return res.status(401).json({ error: 'Invalid credentials' });
 
-    if (user.account_status === 'suspended')
-      return res.status(403).json({ error: 'Your account has been suspended. Contact support for assistance.' });
+    if (['suspended','deletion_pending','deleted'].includes(user.account_status)) {
+      const msg = user.account_status === 'deletion_pending' ? 'Your account deletion request is awaiting admin approval.' : user.account_status === 'deleted' ? 'This account has been deleted.' : 'Your account has been suspended. Contact support for assistance.';
+      return res.status(403).json({ code: 'ACCOUNT_UNAVAILABLE', error: msg });
+    }
 
     if (user.role === 'seller' && user.seller_approval_status === 'pending') {
       return res.status(403).json({
@@ -303,11 +298,21 @@ router.get('/paystack-public-key', (req, res) => {
   res.json({ publicKey: key });
 });
 
+// ─── GET /api/auth/deletion-status ───────────────────────────────────────────
+router.get('/deletion-status', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('account_status deletion_requested_at deletion_reason deletion_reviewed_at deletion_approved_at deletion_retention_until').lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password_hash -email_verify_token -password_reset_token');
     if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.account_status === 'deleted' || user.account_status === 'deletion_pending') return res.status(403).json({ error: 'This account is unavailable.', code: 'ACCOUNT_DELETION' });
     const obj = user.toObject(); obj.id = obj._id;
     res.json(obj);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -567,7 +572,6 @@ router.post('/payout-account', authMiddleware, async (req, res) => {
       success: true, payout_status: user.payout_status,
       bank_name: user.bank_name, bank_code: user.bank_code,
       account_number: user.account_number, account_name: user.account_name,
-      recipient_code: user.payout_recipient_code,
     });
   } catch (e) {
     console.error('[payout-account]', e);
@@ -603,6 +607,31 @@ router.put('/change-password', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── POST /api/auth/request-deletion ─────────────────────────────────────────
+router.post('/request-deletion', authMiddleware, async (req, res) => {
+  try {
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 10) return res.status(400).json({ error: 'Please provide a deletion reason of at least 10 characters.' });
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role === 'admin') return res.status(403).json({ error: 'Admin accounts cannot be deleted from this workflow.' });
+    if (user.account_status === 'deletion_pending') return res.status(409).json({ error: 'Your deletion request is already awaiting admin approval.' });
+    if (user.account_status === 'deleted') return res.status(409).json({ error: 'This account has already been deleted.' });
+    user.account_status = 'deletion_pending';
+    user.deletion_requested_at = new Date();
+    user.deletion_reason = reason;
+    user.deletion_reviewed_at = null;
+    user.deletion_reviewed_by = null;
+    user.deletion_approved_at = null;
+    user.deletion_retention_until = null;
+    await user.save();
+    // Notify admins through the existing audit system's target data; admin UI can review the request.
+    const { UserActivity } = require('../db/database');
+    await UserActivity.create({ user_id: user._id, action: 'account_deletion_requested', method: 'POST', path: '/api/auth/request-deletion', metadata: { reason } });
+    res.json({ success: true, status: 'deletion_pending', message: 'Your deletion request has been submitted for admin approval.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── GET /api/auth/admin-messages ────────────────────────────────────────────
 // Returns unacknowledged admin messages. Does NOT mark them as read/acknowledged —
 // that only happens when the user explicitly presses the acknowledge button
@@ -631,16 +660,15 @@ router.get('/admin-messages', authMiddleware, async (req, res) => {
 // presses the "I've read this" button on the popup.
 router.post('/admin-messages/:id/ack', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('admin_messages');
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const msg = user.admin_messages.id(req.params.id);
-    if (!msg) return res.status(404).json({ error: 'Message not found' });
-
-    msg.acknowledged = true;
-    msg.acknowledged_at = new Date();
-    msg.read = true;
-    await user.save();
+    const result = await User.updateOne(
+      { _id: req.user.id, 'admin_messages._id': req.params.id },
+      { $set: {
+          'admin_messages.$.acknowledged': true,
+          'admin_messages.$.acknowledged_at': new Date(),
+          'admin_messages.$.read': true,
+        } }
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: 'Message not found' });
 
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -729,7 +757,16 @@ router.get('/seller-count', async (req, res) => {
 // GET /api/auth/users/:id/profile — public profile (no auth required)
 router.get('/users/:id/profile', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
+    let profileId = String(req.params.id || '').trim();
+    // Prevent Mongoose CastError from malformed profile URLs such as [object Object].
+    if (profileId.startsWith('{') && profileId.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(profileId);
+        profileId = String(parsed?.$oid || parsed?._id || parsed?.id || '').trim();
+      } catch (_) {}
+    }
+    if (!mongoose.Types.ObjectId.isValid(profileId)) return res.status(400).json({ error: 'Invalid user profile ID' });
+    const user = await User.findById(profileId)
       .select('full_name avatar_url bio university role rating rating_count business_name hostel_name room_number shop_name shop_number delivery_info created_at account_status')
       .lean();
     if (!user || user.account_status === 'suspended') return res.status(404).json({ error: 'User not found' });

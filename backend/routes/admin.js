@@ -1,6 +1,7 @@
+const mongoose = require('mongoose');
 const express = require('express');
 const router  = express.Router();
-const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel, AdminAction } = require('../db/database');
+const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel, AdminAction, UserActivity } = require('../db/database');
 const { adminMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { sendSellerDecisionEmail } = require('../utils/email');
@@ -71,6 +72,7 @@ router.get('/seller-applications', async (req, res) => {
 
 router.post('/seller-applications/:id/approve', async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid seller ID' });
     const seller = await User.findOne({ _id: req.params.id, role: 'seller' });
     if (!seller) return res.status(404).json({ error: 'Seller not found' });
     if (!seller.registration_complete) return res.status(400).json({ error: 'Seller has not completed registration' });
@@ -94,6 +96,7 @@ router.post('/seller-applications/:id/reject', async (req, res) => {
   try {
     const reason = String(req.body?.reason || '').trim();
     if (!reason) return res.status(400).json({ error: 'Rejection reason is required' });
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid seller ID' });
     const seller = await User.findOne({ _id: req.params.id, role: 'seller' });
     if (!seller) return res.status(404).json({ error: 'Seller not found' });
     if (seller.seller_approval_status === 'approved') return res.status(409).json({ error: 'Approved sellers cannot be rejected from this workflow' });
@@ -169,19 +172,25 @@ router.get('/users/:id', async (req, res) => {
       .select('-password_hash -push_subscriptions -used_payment_refs').lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const [listings, orders, convCount] = await Promise.all([
-      Listing.find({ seller_id: user._id, status: { $ne: 'deleted' } })
-        .sort({ created_at: -1 }).limit(10).lean(),
-      Order.find({ $or: [{ buyer_id: user._id }, { seller_id: user._id }] })
-        .sort({ created_at: -1 }).limit(10).lean(),
+    const [listings, orders, convCount, adminActions, userActivities, ratingsGiven, ratingsReceived] = await Promise.all([
+      Listing.find({ seller_id: user._id, status: { $ne: 'deleted' } }).sort({ created_at: -1 }).limit(10).lean(),
+      Order.find({ $or: [{ buyer_id: user._id }, { seller_id: user._id }] }).sort({ created_at: -1 }).limit(10).lean(),
       Conversation.countDocuments({ $or: [{ buyer_id: user._id }, { seller_id: user._id }] }),
+      AdminAction.find({ target_user_id: user._id }).sort({ created_at: -1 }).limit(100).lean(),
+      UserActivity.find({ user_id: user._id }).sort({ created_at: -1 }).limit(200).lean(),
+      Order.find({ buyer_id: user._id, seller_rating: { $ne: null } }).select('seller_id seller_rating seller_review seller_rated_at listing_id').sort({ seller_rated_at: -1 }).limit(50).lean(),
+      Order.find({ seller_id: user._id, buyer_rating: { $ne: null } }).select('buyer_id buyer_rating buyer_review buyer_rated_at listing_id').sort({ buyer_rated_at: -1 }).limit(50).lean(),
     ]);
 
     res.json({
       ...user, id: user._id,
       listings: listings.map(l => ({ ...l, id: l._id })),
-      orders:   orders.map(o => ({ ...o, id: o._id })),
+      orders: orders.map(o => ({ ...o, id: o._id })),
       conv_count: convCount,
+      admin_actions: adminActions.map(a => ({ ...a, id: a._id })),
+      user_activities: userActivities.map(a => ({ ...a, id: a._id })),
+      ratings_given: ratingsGiven,
+      ratings_received: ratingsReceived,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -264,25 +273,7 @@ router.post('/users/:id/message', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 router.delete('/users/:id', async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.role === 'admin') return res.status(403).json({ error: 'Cannot delete admin accounts' });
-
-    // Soft-delete listings
-    await Listing.updateMany({ seller_id: user._id }, { $set: { status: 'deleted' } });
-    // Delete conversations + messages
-    const convIds = (await Conversation.find({
-      $or: [{ buyer_id: user._id }, { seller_id: user._id }]
-    }).select('_id').lean()).map(c => c._id);
-    await Message.deleteMany({ conversation_id: { $in: convIds } });
-    await Conversation.deleteMany({ _id: { $in: convIds } });
-    // Delete user
-    await User.findByIdAndDelete(user._id);
-    await logAdminAction(req, 'user_deleted', user, '', { role: user.role });
-
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  return res.status(410).json({ error: 'Direct account deletion is disabled. Users must request deletion and an admin must approve it.' });
 });
 
 // ── HOSTELS ──────────────────────────────────────────────────────────────────

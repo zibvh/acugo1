@@ -51,15 +51,20 @@ POST /api/orders/:id/accept
 **Option B: Seller Does NOT Respond (6 hours pass)**
 
 1. Automatic refund triggered
-2. Buyer receives email: "Refund issued — seller didn't respond in time"
+2. Buyer receives push notification + email: "Refund initiated — seller didn't respond in time"
 3. Listing re-enabled → `status='active'` (visible again)
 4. Order marked `status='cancelled'`, `escrow_status='cancelled'`
 5. Buyer can rate seller (penalizes profile_health)
-6. Funds returned to buyer's Paystack account
+6. Refund is initiated through Paystack and tracked until completion
 
 **Option C: Seller Explicitly Declines**
 
-- Future enhancement: Allow seller to decline and unlock listing
+1. Order is cancelled immediately.
+2. Escrow is cancelled.
+3. Listing is re-enabled.
+4. Bixcart initiates the buyer refund.
+5. Buyer receives a push notification and email stating that the refund has been initiated.
+6. No seller payout is made for the cancelled order.
 
 **Timeline:** Buyer can proceed after 6 hours if no response
 
@@ -290,7 +295,7 @@ GET    /api/admin/*                         Dispute & escrow management
 ✅ **Profile health system** — Poor ratings damage seller credibility  
 ✅ **Hostel-aware delivery** — Same hostel = free pickup, different = arranged  
 ✅ **Escrow verification codes** — Buyer confirms receipt before payout  
-✅ **Payout via Paystack** — Automatic bank transfers within 24–48h  
+✅ **Payout via Paystack** — Paystack transfer to the seller's verified payout recipient after escrow release  
 ✅ **Edit lock** — Listings locked after 90 minutes to prevent fraud  
 
 ---

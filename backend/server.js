@@ -15,6 +15,27 @@ app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Record authenticated, state-changing user actions without storing request bodies/passwords.
+app.use('/api', (req, res, next) => {
+  if (['GET','HEAD','OPTIONS'].includes(req.method) || req.path.startsWith('/admin')) return next();
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return next();
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(auth.slice(7), process.env.JWT_SECRET);
+    req.user = req.user || decoded;
+    const started = Date.now();
+    res.on('finish', () => {
+      try {
+        const { UserActivity } = require('./db/database');
+        const action = `${req.method} ${req.path}`;
+        UserActivity.create({ user_id: decoded.id, action, method: req.method, path: req.path, status_code: res.statusCode, metadata: { duration_ms: Date.now() - started } }).catch(() => {});
+      } catch (_) {}
+    });
+  } catch (_) {}
+  next();
+});
+
 // ─── Dynamic OG/SEO tags for shared listing links ─────────────────────────────
 // Crawlers (WhatsApp, Twitter/X, Facebook, Telegram, etc.) don't run JS, so the
 // listing page's <meta> tags need to be filled in server-side based on ?id=.

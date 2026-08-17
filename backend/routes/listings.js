@@ -206,6 +206,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       seller_shop_number:  s.shop_number,
       seller_shop_address: s.shop_address,
       seller_delivery_info: s.delivery_info,
+      seller_id:          s._id || listing.seller_id,
       campus:              s.university,
       is_saved,
       is_expired:          isListingExpired(listing),
@@ -220,7 +221,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/listings — seller only, must have credits
+// POST /api/listings — seller only; listings are free
 router.post('/', sellerApprovalMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);

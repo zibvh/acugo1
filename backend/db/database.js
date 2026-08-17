@@ -5,7 +5,13 @@ const userSchema = new mongoose.Schema({
   password_hash:   { type: String, required: true },
   full_name:       { type: String, required: true, trim: true },
   role:            { type: String, required: true, enum: ['buyer', 'seller', 'admin'] },
-  account_status:  { type: String, enum: ['active', 'warned', 'suspended'], default: 'active' },
+  account_status:  { type: String, enum: ['active', 'warned', 'suspended', 'deletion_pending', 'deleted'], default: 'active' },
+  deletion_requested_at: { type: Date, default: null },
+  deletion_reason: { type: String, default: '' },
+  deletion_reviewed_at: { type: Date, default: null },
+  deletion_reviewed_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  deletion_approved_at: { type: Date, default: null },
+  deletion_retention_until: { type: Date, default: null },
   // Seller onboarding approval. Existing sellers default to approved for backwards compatibility.
   seller_approval_status: { type: String, enum: ['approved','pending','rejected'], default: 'approved' },
   seller_approval_reason: { type: String, default: '' },
@@ -250,6 +256,17 @@ const adminActionSchema = new mongoose.Schema({
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { timestamps: { createdAt: 'created_at', updatedAt: false } });
 
+
+const userActivitySchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  action: { type: String, required: true },
+  method: { type: String, default: '' },
+  path: { type: String, default: '' },
+  status_code: { type: Number, default: null },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { timestamps: { createdAt: 'created_at', updatedAt: false } });
+userActivitySchema.index({ user_id: 1, created_at: -1 });
+
 const checkoutIntentSchema = new mongoose.Schema({
   reference: { type: String, required: true, unique: true, index: true },
   buyer_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -330,6 +347,7 @@ async function connectDb() {
 }
 
 const AdminAction = mongoose.model('AdminAction', adminActionSchema);
+const UserActivity = mongoose.model('UserActivity', userActivitySchema);
 
 module.exports = {
   connectDb,
@@ -346,6 +364,7 @@ module.exports = {
   Broadcast,
   CheckoutIntent,
   AdminAction,
+  UserActivity,
   SELLER_COMMISSION_TIERS,
   getSellerCommissionInfo,
 };

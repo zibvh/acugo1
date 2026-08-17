@@ -156,9 +156,7 @@ https://your-app.onrender.com/api/health
 # Landing page (should load the frontend)
 https://your-app.onrender.com/
 
-# Demo login
-Email:    demo@university.edu
-Password: password123
+# Create a real account through the registration page. Any valid email address can be used.
 ```
 
 ---

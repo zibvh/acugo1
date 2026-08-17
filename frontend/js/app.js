@@ -351,10 +351,10 @@ function renderFooter() {
         <li><a href="/pages/auth.html">Sign in</a></li>
       </ul></div>
       <div class="footer-col"><h5>Company</h5><ul>
-        <li><a href="#">About Bixcart</a></li>
-        <li><a href="#">Safety tips</a></li>
-        <li><a href="#">Privacy policy</a></li>
-        <li><a href="#">Terms of use</a></li>
+        <li><a href="/pages/about.html">About Bixcart</a></li>
+        <li><a href="/pages/safety.html">Safety tips</a></li>
+        <li><a href="/pages/privacy.html">Privacy policy</a></li>
+        <li><a href="/pages/terms.html">Terms of use</a></li>
       </ul></div>
     </div>
     <div class="footer-bottom">
@@ -501,10 +501,19 @@ function showAdminMessageModal(msg, queueRest) {
     btn.disabled = true;
     btn.textContent = 'Marking as read…';
     try {
-      if (msg.id) await api.post(`/auth/admin-messages/${msg.id}/ack`, {});
-    } catch {}
-    overlay.remove();
-    if (typeof queueRest === 'function') queueRest();
+      if (msg.id) {
+        await api.post(`/auth/admin-messages/${msg.id}/ack`, {});
+      }
+      // Only dismiss after the server confirms acknowledgement. This guarantees
+      // the same admin message cannot reappear on the next page/load.
+      overlay.remove();
+      if (typeof queueRest === 'function') queueRest();
+    } catch (e) {
+      acking = false;
+      btn.disabled = false;
+      btn.innerHTML = `${icons.check} I've read this`;
+      toast(e?.message || 'Could not acknowledge this message. Please try again.', 'error');
+    }
   });
 }
 
