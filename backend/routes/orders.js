@@ -67,15 +67,20 @@ router.get('/buying', authMiddleware, async (req, res) => {
       .populate('seller_id',  'full_name university')
       .sort({ created_at: -1 }).lean();
 
-    res.json(orders.map(o => ({
-      ...o, id: o._id,
-      listing_title:    o.listing_id?.title,
-      listing_images:   o.listing_id?.images || [],
-      category:         o.listing_id?.category,
-      seller_id:        o.seller_id?._id || o.seller_id,
-      seller_name:      o.seller_id?.full_name,
-      seller_university:o.seller_id?.university,
-    })));
+    res.json(orders.map(o => {
+      // escrow_code is deliberately left out — it's for the seller to hand over
+      // in person, not something the buyer should be able to read from the app
+      const { escrow_code, ...safe } = o;
+      return {
+        ...safe, id: o._id,
+        listing_title:    o.listing_id?.title,
+        listing_images:   o.listing_id?.images || [],
+        category:         o.listing_id?.category,
+        seller_id:        o.seller_id?._id || o.seller_id,
+        seller_name:      o.seller_id?.full_name,
+        seller_university:o.seller_id?.university,
+      };
+    }));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -238,7 +243,10 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       checkout_group,
       order_count: orders.length,
       total: orders.reduce((sum, o) => sum + o.amount, 0),
-      verification_code: escrowCode,
+      // NOTE: verification_code intentionally NOT included here. The code is
+      // for the seller to hand to the buyer at pickup/delivery, proving the
+      // item actually changed hands — sending it to the buyer up front would
+      // let them "confirm delivery" without ever receiving anything.
       orders: orders.map(o => ({ ...o.toObject(), id: o._id })),
     });
   } catch (e) {
@@ -398,6 +406,8 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (String(order.buyer_id) !== String(req.user.id))
       return res.status(403).json({ error: 'Only the buyer can confirm delivery' });
+    if (order.status !== 'fulfilled')
+      return res.status(400).json({ error: 'The seller has not marked this order as shipped yet' });
     if (!order.escrow_code) return res.status(400).json({ error: 'No escrow verification code is attached to this order' });
     if (order.escrow_status === 'released')
       return res.status(409).json({ error: 'Escrow has already been released for this order' });
@@ -504,6 +514,12 @@ router.post('/:id/resolve', authMiddleware, async (req, res) => {
 
     if (order.status === 'completed' || order.status === 'cancelled')
       return res.status(400).json({ error: `Order already ${order.status}` });
+
+    // Escrow/checkout orders (paid via Paystack) must be completed through
+    // confirm-delivery so the verification code is actually checked — otherwise
+    // either side could mark "completed" here and skip verification entirely.
+    if (outcome === 'completed' && order.payment_reference)
+      return res.status(400).json({ error: 'This order needs the delivery code to be confirmed — use "Verify delivery code" instead' });
 
     const update = { status: outcome, escrow_status: outcome === 'completed' ? 'released' : 'cancelled' };
     if (outcome === 'completed') {

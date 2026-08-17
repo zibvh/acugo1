@@ -113,6 +113,24 @@ function toast(message, type = 'default', duration = 3500) {
 
 // ── FORMAT HELPERS ──
 function formatPrice(p) { return '₦' + parseFloat(p).toLocaleString('en-NG', {minimumFractionDigits: 0, maximumFractionDigits: 0}); }
+
+// Human-readable delivery window — '6h' -> '6 hours', etc.
+function windowLabel(w) {
+  const map = { '6h': '6 hours', '12h': '12 hours', '1d': '1 day', '3d': '3 days', '7d': '7 days' };
+  return map[w] || w || '1 day';
+}
+
+// The backend order status has several in-between states (paid, confirmed,
+// fulfilled, completing...) that exist for the escrow/accept/ship pipeline, but
+// the buyer and seller only need to see three buckets: an order that hasn't been
+// verified with the delivery code yet is "pending", no matter which internal step
+// it's on; verified orders are "completed"; everything else is "cancelled".
+function orderDisplayStatus(o) {
+  if (o.status === 'completed') return 'completed';
+  if (o.status === 'cancelled') return 'cancelled';
+  return 'pending';
+}
+
 function formatDate(d) {
   if (!d) return '';
   const date = new Date(d);
@@ -226,15 +244,10 @@ function renderNav(activePage = '') {
       ${icons.shoppingBag}
       <span id="nav-cart-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;align-items:center;justify-content:center;line-height:1;border:1.5px solid var(--bg);"></span>
     </a>` : ''}
-    <a href="/pages/messages.html" class="btn btn-surface btn-icon" title="Messages" id="nav-msg-btn" style="position:relative">
-      ${icons.messageCircle}
-      <span id="nav-unread-badge" style="display:none;position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:var(--accent);border:1.5px solid var(--bg);"></span>
-    </a>
     <div style="position:relative">
       <div class="avatar avatar-sm" style="border:2px solid var(--border);cursor:pointer;" onclick="document.getElementById('nav-user-menu').classList.toggle('open')">${getInitials(user.full_name)}</div>
       <div id="nav-user-menu" class="nav-user-menu">
         <a href="${dashHref}" class="nav-user-menu-item">${icons.user} Dashboard</a>
-        <a href="/pages/messages.html" class="nav-user-menu-item">${icons.messageCircle} Messages</a>
         <a href="/pages/wishlist.html" class="nav-user-menu-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Wishlist</a>
         <a href="/pages/settings.html" class="nav-user-menu-item">${icons.settings} Settings</a>
         <div class="nav-user-menu-sep"></div>
@@ -260,9 +273,7 @@ function renderNav(activePage = '') {
       if (menu && !menu.closest('.nav-actions')?.contains(e.target)) menu.classList.remove('open');
     }, { once: false });
 
-    // Refresh badge now that the element exists, and start polling
-    setTimeout(updateUnreadBadge, 0);
-    startUnreadPoll();
+    // Refresh cart badge now that the element exists
     if (isBuyer) setTimeout(refreshCartBadge, 0);
   }
 }

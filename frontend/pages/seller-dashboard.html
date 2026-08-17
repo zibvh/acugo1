@@ -269,9 +269,9 @@
       <!-- Orders panel (cart checkouts — delivery orders to fulfill) -->
       <div id="tab-orders" style="display:none;">
         <div style="display:flex;gap:8px;margin-bottom:12px;">
-          <button class="btn btn-ghost btn-sm ord-filter-btn active" data-of="pending" onclick="setOrderFilter('pending',this)">Needs action</button>
-          <button class="btn btn-ghost btn-sm ord-filter-btn" data-of="confirmed" onclick="setOrderFilter('confirmed',this)">Preparing</button>
+          <button class="btn btn-ghost btn-sm ord-filter-btn active" data-of="pending" onclick="setOrderFilter('pending',this)">Pending</button>
           <button class="btn btn-ghost btn-sm ord-filter-btn" data-of="completed" onclick="setOrderFilter('completed',this)">Completed</button>
+          <button class="btn btn-ghost btn-sm ord-filter-btn" data-of="cancelled" onclick="setOrderFilter('cancelled',this)">Cancelled</button>
           <button class="btn btn-ghost btn-sm ord-filter-btn" data-of="all" onclick="setOrderFilter('all',this)">All</button>
         </div>
         <div class="card" style="padding:0 20px;" id="orders-container">
@@ -490,8 +490,7 @@
 
   function renderSellerOrders() {
     const filtered = currentOrderFilter === 'all' ? allOrders
-      : currentOrderFilter === 'confirmed' ? allOrders.filter(o => ['confirmed','completing'].includes(o.status))
-      : allOrders.filter(o => o.status === currentOrderFilter);
+      : allOrders.filter(o => orderDisplayStatus(o) === currentOrderFilter);
 
     const el = document.getElementById('orders-container');
     if (!filtered.length) {
@@ -506,15 +505,6 @@
     allOrders.forEach(o => { if (o.checkout_group) groupCounts[o.checkout_group] = (groupCounts[o.checkout_group] || 0) + 1; });
 
     el.innerHTML = filtered.map(o => {
-      const escrowState = (o.escrow_status || o.status || 'pending');
-      const escrowLabel = {
-        pending: 'Awaiting payment',
-        held: 'Escrow held',
-        released: 'Escrow released',
-        disputed: 'Dispute open',
-        cancelled: 'Escrow cancelled',
-      }[escrowState] || 'Escrow update';
-
       return `
       <div class="order-card">
         <div class="order-card-top">
@@ -522,8 +512,7 @@
           <div class="order-info">
             <div class="order-title">${o.listing_title}</div>
             <div class="order-meta">
-              ${statusBadge(o.status)}
-              <span class="badge badge-surface">${escrowLabel}</span>
+              ${statusBadge(orderDisplayStatus(o))}
               <span style="display:flex;align-items:center;gap:4px;">${icons.user} ${o.buyer_name || 'Buyer'}</span>
               <span>${formatDate(o.created_at)}</span>
             </div>
@@ -532,21 +521,20 @@
               <div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:flex-start;gap:4px;">
                 ${icons.truck} <span>${o.delivery_address.full_name} · ${o.delivery_address.phone}<br>${o.delivery_address.address}${o.delivery_address.campus ? ', ' + o.delivery_address.campus : ''}${o.delivery_address.note ? ` — "${o.delivery_address.note}"` : ''}</span>
               </div>` : ''}
-            ${o.escrow_code ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Verification code: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong></div>` : ''}
-            ${o.escrow_status === 'held' ? `<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Customer payment is secured in escrow until delivery is confirmed.</div>` : ''}
-            ${o.status === 'fulfilled' ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for buyer to verify the delivery code…</div>` : ''}
-            ${o.status === 'completing' && o.seller_marked_complete ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for buyer to confirm receipt…</div>` : ''}
+            ${o.status === 'paid' ? `<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Payment secured in escrow — accept the order to get started.</div>` : ''}
+            ${o.escrow_code && ['confirmed','fulfilled'].includes(o.status) ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Give the buyer this code at handoff: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong></div>` : ''}
+            ${o.status === 'fulfilled' ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for buyer to enter the code…</div>` : ''}
           </div>
         </div>
         <div class="order-actions">
           <div style="font-size:18px;font-weight:700;">${formatCurrency(o.amount)}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            ${o.status === 'pending' ? `
+            ${o.status === 'paid' ? `
               <button class="btn btn-primary btn-sm" onclick="acceptOrder('${o.id}')">${icons.check} Accept</button>
               <button class="btn btn-danger btn-sm" onclick="declineOrder('${o.id}')">Decline</button>` : ''}
-            ${(o.status === 'confirmed' || (o.status === 'completing' && !o.seller_marked_complete) || o.escrow_status === 'held')
-              ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${o.id}')">${icons.truck} Mark as shipped</button>` : ''}
+            ${o.status === 'confirmed' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${o.id}')">${icons.truck} Mark as shipped</button>` : ''}
             ${o.status === 'completed' ? `<span style="font-size:13px;color:#059669;font-weight:600;">${icons.check} Delivered</span>` : ''}
+            ${o.status === 'cancelled' ? `<span style="font-size:13px;color:var(--ink-3);font-weight:600;">Cancelled</span>` : ''}
             ${o.buyer_rating ? `<span style="font-size:13px;color:#d69e2e;font-weight:600;">Rated ${'★'.repeat(o.buyer_rating)}</span>` : ''}
           </div>
         </div>
@@ -564,7 +552,7 @@
 
   window.acceptOrder = async (id) => {
     try {
-      await api.put(`/orders/${id}/status`, { status: 'confirmed' });
+      await api.post(`/orders/${id}/accept`);
       toast('Order accepted — get it ready for delivery', 'success');
       loadOrders();
     } catch (e) { toast(e.message, 'error'); }
@@ -573,7 +561,7 @@
   window.declineOrder = async (id) => {
     if (!confirm('Decline this order? The buyer will be refunded and the listing will relist.')) return;
     try {
-      await api.put(`/orders/${id}/status`, { status: 'cancelled' });
+      await api.post(`/orders/${id}/resolve`, { outcome: 'cancelled' });
       toast('Order declined', 'success');
       loadOrders();
     } catch (e) { toast(e.message, 'error'); }

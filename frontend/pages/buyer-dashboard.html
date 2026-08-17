@@ -220,9 +220,6 @@
           <button class="dash-nav-item" data-tab="saved">
             <span id="nav-icon-saved"></span> Saved Items
           </button>
-          <button class="dash-nav-item" data-tab="messages">
-            <span id="nav-icon-messages"></span> Messages
-          </button>
           <div class="dash-nav-divider"></div>
           <a class="dash-nav-item" href="settings.html" style="text-decoration:none;">
             <span id="nav-icon-settings"></span> Account Settings
@@ -245,7 +242,6 @@
           <div class="tabs order-tabs-scroll" id="order-tabs">
             <button class="tab-btn active" data-status="all">All</button>
             <button class="tab-btn" data-status="pending">Pending</button>
-            <button class="tab-btn" data-status="confirmed">Confirmed</button>
             <button class="tab-btn" data-status="completed">Completed</button>
             <button class="tab-btn" data-status="cancelled">Cancelled</button>
           </div>
@@ -264,15 +260,6 @@
           <div class="saved-grid" id="saved-list"></div>
         </div>
 
-        <!-- Messages Tab -->
-        <div id="tab-messages" class="tab-content" style="display:none;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
-            <h2 style="font-size:22px;font-weight:700;">Messages</h2>
-            <a href="messages.html" class="btn btn-primary btn-sm">Open full inbox</a>
-          </div>
-          <div id="convs-list" style="display:flex;flex-direction:column;gap:10px;"></div>
-        </div>
-
       </main>
     </div>
   </div>
@@ -288,9 +275,7 @@
   // inject nav icons
   document.getElementById('nav-icon-purchases').innerHTML = icons.shoppingBag;
   document.getElementById('nav-icon-saved').innerHTML = icons.heart;
-  document.getElementById('nav-icon-messages').innerHTML = icons.messageCircle;
   document.getElementById('nav-icon-settings').innerHTML = icons.settings;
-  document.querySelector('[data-tab="messages"]').querySelector('span').nextSibling;
 
   // Fix sidebar logout icon
   document.querySelectorAll('.profile-card .btn').forEach(b => {
@@ -307,7 +292,6 @@
       document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
       document.getElementById(`tab-${currentTab}`).style.display = 'block';
       if (currentTab === 'saved') loadSaved();
-      if (currentTab === 'messages') loadConversations();
     });
   });
 
@@ -402,7 +386,7 @@
   }
 
   function renderOrders() {
-    const filtered = orderStatusFilter === 'all' ? allOrders : allOrders.filter(o => o.status === orderStatusFilter);
+    const filtered = orderStatusFilter === 'all' ? allOrders : allOrders.filter(o => orderDisplayStatus(o) === orderStatusFilter);
     const el = document.getElementById('orders-list');
     if (!filtered.length) {
       el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">${icons.package}</div><h3>No ${orderStatusFilter === 'all' ? '' : orderStatusFilter} orders</h3><p>Your ${orderStatusFilter === 'all' ? '' : orderStatusFilter + ' '}orders will appear here.</p></div>`;
@@ -414,25 +398,12 @@
     allOrders.forEach(o => { if (o.checkout_group) groupCounts[o.checkout_group] = (groupCounts[o.checkout_group] || 0) + 1; });
 
     el.innerHTML = filtered.map(o => {
-      const escrowState = (o.escrow_status || o.status || 'pending');
-      const escrowLabel = {
-        pending: 'Pending escrow',
-        held: 'Escrow held',
-        released: 'Escrow released',
-        disputed: 'Dispute open',
-        cancelled: 'Escrow cancelled',
-      }[escrowState] || 'Escrow update';
-
-      const escrowCodeRow = o.escrow_code
-        ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Verification code: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong> ${o.escrow_code_expires_at ? `· expires ${formatDate(o.escrow_code_expires_at)}` : ''}</div>`
-        : '';
-
-      const escrowMessage = escrowState === 'held'
-        ? '<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Funds are securely held until you confirm delivery.</div>'
-        : escrowState === 'released'
-          ? '<div style="font-size:12px;color:#065f46;margin-top:6px;font-weight:600;">✅ Delivery confirmed and seller payout has been released.</div>'
-          : escrowState === 'disputed'
-            ? '<div style="font-size:12px;color:#991b1b;margin-top:6px;font-weight:600;">⚠️ Admin review is active for this order.</div>'
+      const stageMessage = o.status === 'paid'
+        ? '<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Waiting for the seller to accept your order.</div>'
+        : o.status === 'confirmed'
+          ? '<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">📦 Seller accepted — waiting for them to ship/hand it over.</div>'
+          : o.status === 'fulfilled'
+            ? '<div style="font-size:12px;color:#065f46;margin-top:6px;font-weight:600;">✅ Seller marked this as shipped. Ask them for the code below to confirm you received it.</div>'
             : '';
 
       return `
@@ -444,8 +415,7 @@
           <div class="order-info">
             <div class="order-title">${o.listing_title}</div>
             <div class="order-meta">
-              ${statusBadge(o.status)}
-              <span class="badge badge-surface">${escrowLabel}</span>
+              ${statusBadge(orderDisplayStatus(o))}
               <span style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--accent);text-decoration:underline;text-decoration-style:dotted;" onclick="openUserProfile('${o.seller_id || ''}','${(o.seller_name||'').replace(/'/g,"\\'")}')">
                 ${icons.user} ${o.seller_name}
               </span>
@@ -455,20 +425,20 @@
             ${o.fulfillment === 'delivery' && o.delivery_address
               ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:4px;">${icons.truck} Delivering to ${o.delivery_address.address}${o.delivery_address.campus ? ', ' + o.delivery_address.campus : ''}</div>`
               : (o.meetup_location ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:4px;">${icons.mapPin} Meetup: ${o.meetup_location}</div>` : '')}
-            ${escrowCodeRow}
-            ${escrowMessage}
-            ${o.status === 'completing' && o.buyer_marked_complete ? `<div style="font-size:12px;color:#d69e2e;margin-top:6px;font-weight:600;">⏳ Waiting for seller to confirm…</div>` : ''}
+            ${stageMessage}
             ${o.status === 'completed' && !o.buyer_rating ? `<div style="font-size:12px;color:#059669;margin-top:6px;font-weight:600;">✓ Complete — tap ★ to rate</div>` : ''}
+            ${o.status === 'fulfilled' ? `
+              <div style="display:flex;gap:8px;margin-top:10px;">
+                <input class="form-input" id="code-input-${o.id}" placeholder="Enter code from seller" style="max-width:200px;font-size:13px;padding:8px 10px;letter-spacing:.08em;" maxlength="12">
+                <button class="btn btn-accent btn-sm" onclick="confirmEscrowDelivery('${o.id}')">Confirm receipt</button>
+              </div>` : ''}
           </div>
         </div>
         <div class="order-actions">
           <div style="font-size:18px;font-weight:700;">${formatCurrency(o.amount)}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <a href="listing.html?id=${o.listing_id}" class="btn btn-ghost btn-sm">View listing</a>
-            ${o.status === 'pending' ? `<button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button>` : ''}
-            ${(o.status === 'confirmed' || (o.status === 'completing' && !o.buyer_marked_complete))
-              ? `<button class="btn btn-primary btn-sm" onclick="markComplete('${o.id}')">✓ Mark ${o.fulfillment === 'delivery' ? 'as received' : 'Complete'}</button>` : ''}
-            ${o.escrow_status === 'held' ? `<button class="btn btn-accent btn-sm" onclick="confirmEscrowDelivery('${o.id}')">Verify delivery code</button>` : ''}
+            ${o.status === 'paid' ? `<button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button>` : ''}
             ${o.status === 'completed' && !o.buyer_rating
               ? `<button class="btn btn-accent btn-sm" onclick="openRatingModal('${o.id}','${(o.seller_name||'').replace(/'/g,"\\'")}')">★ Rate Seller</button>` : ''}
             ${o.buyer_rating ? `<span style="font-size:13px;color:#d69e2e;font-weight:600;">Rated ${'★'.repeat(o.buyer_rating)}</span>` : ''}
@@ -479,11 +449,12 @@
   }
 
   window.confirmEscrowDelivery = async (id) => {
-    const code = window.prompt('Enter the 6-digit verification code shared by the seller:');
-    if (!code || !String(code).trim()) return;
+    const input = document.getElementById(`code-input-${id}`);
+    const code = input?.value.trim();
+    if (!code) { toast('Enter the code the seller gave you', 'error'); return; }
     try {
-      await api.post(`/orders/${id}/confirm-delivery`, { code: String(code).trim() });
-      toast('Delivery verified. Escrow released to seller.', 'success');
+      await api.post(`/orders/${id}/confirm-delivery`, { code });
+      toast('Delivery confirmed. Escrow released to seller.', 'success');
       loadOrders();
     } catch (e) { toast(e.message, 'error'); }
   };
@@ -491,21 +462,8 @@
   window.cancelOrder = async (id) => {
     if (!confirm('Cancel this order? The listing will become available again.')) return;
     try {
-      await api.put(`/orders/${id}/status`, { status: 'cancelled' });
+      await api.post(`/orders/${id}/resolve`, { outcome: 'cancelled' });
       toast('Order cancelled', 'success');
-      loadOrders();
-    } catch(e) { toast(e.message, 'error'); }
-  };
-
-  window.markComplete = async (id) => {
-    if (!confirm('Mark this transaction as complete on your end?')) return;
-    try {
-      const result = await api.post(`/orders/${id}/mark-complete`, {});
-      toast('Marked complete!', 'success');
-      if (result.needs_rating) {
-        const o = allOrders.find(x => x.id === id);
-        openRatingModal(id, o?.seller_name || 'Seller');
-      }
       loadOrders();
     } catch(e) { toast(e.message, 'error'); }
   };
@@ -588,32 +546,6 @@
     } catch(e) { el.innerHTML = `<p class="text-muted">${e.message}</p>`; }
   }
 
-  async function loadConversations() {
-    const el = document.getElementById('convs-list');
-    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--ink-3);">${icons.loader} Loading messages…</div>`;
-    try {
-      const convs = await api.get('/messages/conversations');
-      if (!convs.length) {
-        el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">${icons.messageCircle}</div><h3>No messages yet</h3><p>Contact a seller to start a conversation.</p></div>`;
-        return;
-      }
-      el.innerHTML = convs.slice(0, 5).map(c => `
-        <a href="messages.html?conv=${c.id}" style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-lg);text-decoration:none;transition:all .2s;" class="card-hover">
-          <div class="avatar avatar-md" style="background:var(--surface-2);cursor:pointer;" onclick="event.preventDefault();window.location.href='user-profile.html?id=${c.other_user.id}'">${getInitials(c.other_user.name)}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:14px;font-weight:${c.unread_count > 0 ? '700' : '600'};margin-bottom:2px;">
-              <a href="user-profile.html?id=${c.other_user.id}" onclick="event.stopPropagation();event.preventDefault();window.location.href='user-profile.html?id=${c.other_user.id}'" style="color:inherit;text-decoration:none;">${c.other_user.name}</a>
-            </div>
-            <div style="font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.last_message || 'No messages yet'}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
-            <div style="font-size:11px;color:var(--ink-3);">${formatDate(c.last_message_at)}</div>
-            ${c.unread_count > 0 ? `<span class="badge badge-accent">${c.unread_count}</span>` : ''}
-          </div>
-        </a>`).join('');
-      if (convs.length > 5) el.innerHTML += `<a href="messages.html" class="btn btn-ghost w-full" style="display:flex;justify-content:center;">View all ${convs.length} conversations</a>`;
-    } catch(e) { el.innerHTML = `<p class="text-muted">${e.message}</p>`; }
-  }
 
   document.getElementById('logout-btn').addEventListener('click', () => {
     auth.clear();

@@ -81,12 +81,7 @@
   .breadcrumb-sep { opacity: .4; display: flex; }
   .msg-modal-input { min-height: 90px; }
   .view-count { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ink-3); }
-  .delivery-choice-box { background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 12px; }
-  .delivery-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
-  .delivery-mode { width: 100%; padding: 12px 10px; border-radius: var(--radius-md); border: 1.5px solid var(--border); background: var(--surface); text-align: left; color: var(--ink-2); transition: all .15s; cursor: pointer; }
-  .delivery-mode:hover { border-color: var(--ink); }
-  .delivery-mode.active { background: var(--ink); color: white; border-color: var(--ink); }
-  .delivery-mode small { display: block; margin-top: 4px; opacity: .8; }
+  .hostel-status-box { border-radius: var(--radius-lg); padding: 14px; margin-bottom: 12px; }
 
   @media(max-width:900px) {
     .listing-layout { grid-template-columns: 1fr; }
@@ -147,31 +142,6 @@
   </div>
 </div>
 
-<!-- Offer Modal -->
-<div class="modal-overlay" id="offer-modal">
-  <div class="modal">
-    <div class="modal-header">
-      <span class="modal-title">Make an offer</span>
-      <button class="btn btn-ghost btn-icon-circle btn-sm" onclick="closeModal('offer-modal')" style="font-size:18px;line-height:1;">&#x2715;</button>
-    </div>
-    <div class="modal-body">
-      <p style="font-size:14px;color:var(--ink-2);margin-bottom:16px;line-height:1.6;">Send your offer to the seller. They'll respond via messages if interested.</p>
-      <div class="form-group" style="margin-bottom:14px;">
-        <label class="form-label">Your offer (₦)</label>
-        <input class="form-input" id="offer-amount" type="number" min="1" placeholder="Enter amount">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Note (optional)</label>
-        <textarea class="form-textarea" id="offer-note" placeholder="Add any details about pickup, etc." style="min-height:70px;"></textarea>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('offer-modal')">Cancel</button>
-      <button class="btn btn-accent" id="send-offer-btn">Send offer</button>
-    </div>
-  </div>
-</div>
-
 <footer class="footer"></footer>
 <script src="../js/app.js"></script>
 <script>
@@ -217,18 +187,6 @@
     const isSeller = user?.id === l.seller_id;
     const discount = l.original_price ? Math.round((1 - l.price / l.original_price) * 100) : 0;
     const sameHostel = !!(user?.hostel_name && l.seller_hostel && String(user.hostel_name).toLowerCase() === String(l.seller_hostel).toLowerCase());
-    const deliveryInfoText = l.seller_delivery_info || '';
-    const deliveryBox = document.getElementById('delivery-info-box');
-    if (deliveryBox) {
-      if (deliveryInfoText) {
-        deliveryBox.style.display = 'block';
-        document.getElementById('delivery-info-text').textContent = deliveryInfoText;
-      } else {
-        deliveryBox.style.display = 'none';
-      }
-    }
-    const selectedDeliveryMode = sameHostel ? 'pickup' : 'delivery';
-    window.selectedDeliveryMode = selectedDeliveryMode;
 
     document.title = `${l.title} — Bixcart`;
 
@@ -242,32 +200,33 @@
 
     const condClass = { 'New': 'green', 'Like New': 'green', 'Good': 'amber', 'Fair': 'amber' }[l.condition] || 'surface';
 
-    const sameHostelLabel = sameHostel ? 'Arrange hostel pickup' : 'Chat about delivery';
-    const deliveryChoiceHTML = !isSeller && l.status === 'active' ? `
-      <div class="delivery-choice-box">
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);">Delivery option</div>
-        <div class="delivery-mode-grid">
-          <button type="button" class="delivery-mode ${sameHostel ? 'active' : ''}" data-mode="pickup" onclick="setDeliveryMode('pickup')" ${sameHostel ? '' : 'disabled'}>
-            <strong>Hostel pickup</strong>
-            <small>${sameHostel ? `Meet in ${l.seller_hostel}` : 'Only available when you are in the same hostel'}</small>
-          </button>
-          <button type="button" class="delivery-mode ${!sameHostel ? 'active' : ''}" data-mode="delivery" onclick="setDeliveryMode('delivery')">
-            <strong>Delivery chat</strong>
-            <small>Agree where and how to meet</small>
-          </button>
+    const sameHostelLabel = sameHostel ? 'Arrange hostel pickup' : 'Message seller';
+    const hostelStatusHTML = !isSeller && l.status === 'active' ? (sameHostel ? `
+      <div class="hostel-status-box" style="background:var(--green-bg,#eaf6ee);border:1.5px solid #bfe3cc;">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <span style="color:var(--green,#2d7a4f);flex-shrink:0;margin-top:1px;">${icons.check}</span>
+          <div style="font-size:13px;color:#1f5c38;line-height:1.6;">
+            <strong>You're both in ${l.seller_hostel}!</strong> You can pick this up directly${l.seller_room ? ` — Room ${l.seller_room}` : ''}.
+          </div>
         </div>
       </div>
-    ` : '';
+    ` : `
+      <div class="hostel-status-box" style="background:var(--bg);border:1.5px solid var(--border);">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <span style="color:var(--ink-3);flex-shrink:0;margin-top:1px;">${icons.mapPin}</span>
+          <div style="font-size:13px;color:var(--ink-2);line-height:1.6;">
+            You're in a different hostel from the seller${l.seller_hostel ? ` (they're in ${l.seller_hostel})` : ''}. Message them to arrange delivery.
+          </div>
+        </div>
+      </div>
+    `) : '';
     const ctaButtons = isSeller ? `
       <a href="sell.html?edit=${l.id}" class="btn btn-ghost w-full" style="display:flex;">${icons.edit} Edit listing</a>
     ` : (l.status !== 'active' ? `
       <button class="btn btn-surface w-full" disabled>${icons.package} ${l.status === 'sold' ? 'Item sold' : 'Not available'}</button>
     ` : `
       <button class="btn btn-accent btn-lg w-full" id="add-cart-btn" onclick="addToCartFromListing('${l.id}')">${icons.shoppingBag} Add to cart</button>
-      <div style="display:flex;gap:10px;">
-        <button class="btn btn-surface w-full" id="contact-btn" onclick="openMsgModal()">${icons.messageCircle} ${sameHostelLabel}</button>
-        <button class="btn btn-ghost w-full" id="offer-btn" onclick="openOfferModal()">${icons.tag} Make an offer</button>
-      </div>
+      ${!sameHostel ? `<button class="btn btn-surface w-full" id="contact-btn" onclick="openMsgModal()">${icons.messageCircle} ${sameHostelLabel}</button>` : ''}
     `);
 
     document.getElementById('page-content').innerHTML = `
@@ -375,13 +334,14 @@
             </div>
             <div class="sticky-card-body">
               <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;" id="cta-buttons">
-                ${deliveryChoiceHTML}
+                ${hostelStatusHTML}
                 ${ctaButtons}
               </div>
 
-              <div id="delivery-info-box" style="display:none; background:var(--bg); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:12px 14px; font-size:12px; color:var(--ink-2); line-height:1.6; margin-bottom:12px;">
-                <strong style="color:var(--ink);">Delivery info:</strong> <span id="delivery-info-text"></span>
-              </div>
+              ${l.seller_delivery_info ? `
+              <div id="delivery-info-box" style="background:var(--bg); border:1.5px solid var(--border); border-radius:var(--radius-lg); padding:12px 14px; font-size:12px; color:var(--ink-2); line-height:1.6; margin-bottom:12px;">
+                <strong style="color:var(--ink);">Delivery info:</strong> <span id="delivery-info-text">${l.seller_delivery_info}</span>
+              </div>` : ''}
 
               <button class="btn btn-surface w-full" id="save-listing-btn" onclick="handleSave()" style="display:flex;">
                 ${l.is_saved ? icons.heartFilled : icons.heart}
@@ -453,43 +413,13 @@
   }
   window.addToCartFromListing = addToCartFromListing;
 
-  function setDeliveryMode(mode) {
-    const validModes = ['pickup', 'delivery'];
-    if (!validModes.includes(mode)) return;
-    const me = auth.getUser();
-    const sameHostel = !!(me?.hostel_name && listingData?.seller_hostel && String(me.hostel_name).toLowerCase() === String(listingData.seller_hostel).toLowerCase());
-    if (mode === 'pickup' && !sameHostel) return;
-    window.selectedDeliveryMode = mode;
-    document.querySelectorAll('.delivery-mode').forEach(btn => {
-      const active = btn.dataset.mode === mode;
-      btn.classList.toggle('active', active);
-    });
-    const button = document.getElementById('contact-btn');
-    if (button) {
-      button.innerHTML = `${icons.messageCircle} ${mode === 'pickup' ? 'Arrange hostel pickup' : 'Chat about delivery'}`;
-    }
-  }
-  window.setDeliveryMode = setDeliveryMode;
-
   function openMsgModal() {
     if (!auth.requireAuth()) return;
-    const me = auth.getUser();
-    const sameHostel = !!(me?.hostel_name && listingData?.seller_hostel && String(me.hostel_name).toLowerCase() === String(listingData.seller_hostel).toLowerCase());
-    const mode = window.selectedDeliveryMode || (sameHostel ? 'pickup' : 'delivery');
     document.getElementById('msg-listing-info').innerHTML = `<strong>${listingData?.title}</strong> · ${formatPrice(listingData?.price)}`;
-    document.getElementById('msg-input').value = mode === 'pickup'
-      ? `Hi! I stay in ${me.hostel_name}. Can I come collect this item from your hostel${listingData?.seller_room ? ' in room ' + listingData.seller_room : ''}?`
-      : `Hi! I'm interested in this item. Can we chat about delivery and the best place to meet or hand it over?`;
+    document.getElementById('msg-input').value = `Hi! I'm interested in this item. Can we arrange delivery, or agree on a place to meet?`;
     openModal('msg-modal');
   }
   window.openMsgModal = openMsgModal;
-
-  function openOfferModal() {
-    if (!auth.requireAuth()) return;
-    document.getElementById('offer-amount').value = '';
-    openModal('offer-modal');
-  }
-  window.openOfferModal = openOfferModal;
 
   document.getElementById('send-msg-btn').addEventListener('click', async () => {
     const content = document.getElementById('msg-input').value.trim();
@@ -502,18 +432,6 @@
       toast('Message sent!', 'success');
       setTimeout(() => window.location.href = `/pages/messages.html?conv=${r.conversation_id}`, 800);
     } catch(e) { toast(e.message, 'error'); btn.disabled = false; btn.textContent = 'Send message'; }
-  });
-
-  document.getElementById('send-offer-btn').addEventListener('click', async () => {
-    const amount = document.getElementById('offer-amount').value;
-    const note = document.getElementById('offer-note').value.trim();
-    if (!amount || parseFloat(amount) <= 0) { toast('Enter a valid offer amount', 'error'); return; }
-    const content = `I'd like to offer ₦${parseFloat(amount).toLocaleString('en-NG', {minimumFractionDigits: 0})} for "${listingData?.title}".${note ? ' ' + note : ''}`;
-    try {
-      await api.post('/messages/send', { receiver_id: listingData.seller_id, listing_id: listingData.id, content });
-      closeModal('offer-modal');
-      toast('Offer sent!', 'success');
-    } catch(e) { toast(e.message, 'error'); }
   });
 
   async function handleSave() {
