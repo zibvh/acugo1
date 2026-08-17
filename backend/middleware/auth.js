@@ -35,4 +35,20 @@ function adminMiddleware(req, res, next) {
   });
 }
 
-module.exports = { authMiddleware, optionalAuth, adminMiddleware };
+
+function sellerApprovalMiddleware(req, res, next) {
+  authMiddleware(req, res, async () => {
+    try {
+      if (req.user?.role !== 'seller') return res.status(403).json({ error: 'Seller access required' });
+      const { User } = require('../db/database');
+      const user = await User.findById(req.user.id).select('seller_approval_status account_status').lean();
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (user.account_status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+      if (user.seller_approval_status === 'pending') return res.status(403).json({ code: 'SELLER_APPROVAL_PENDING', error: 'Your seller account is awaiting admin approval. Please allow up to 6 hours.' });
+      if (user.seller_approval_status === 'rejected') return res.status(403).json({ code: 'SELLER_APPROVAL_REJECTED', error: 'Your seller application was rejected.' });
+      next();
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+}
+
+module.exports = { authMiddleware, optionalAuth, adminMiddleware, sellerApprovalMiddleware };

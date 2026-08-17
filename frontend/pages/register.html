@@ -217,24 +217,32 @@
       </div>
       <div class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px;">
         <div class="form-group">
-          <label class="form-label">Hostel name</label>
+          <label class="form-label">Level <span style="color:var(--red);">*</span></label>
+          <select class="form-select" id="reg-level" required><option value="">Select level</option><option value="100 Level">100 Level</option><option value="200 Level">200 Level</option><option value="300 Level">300 Level</option><option value="400 Level">400 Level</option><option value="500 Level">500 Level</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Hostel <span style="color:var(--red);">*</span></label>
           <select class="form-select" id="reg-hostel">
             <option value="">Select hostel</option>
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Room number</label>
+          <label class="form-label">Room number <span style="color:var(--red);">*</span></label>
           <input class="form-input" type="text" id="reg-room" placeholder="e.g. B204">
         </div>
       </div>
-      <div class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+      <div id="seller-shop-fields" class="settings-grid-2" style="grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; display:none;">
         <div class="form-group">
-          <label class="form-label">Shop name</label>
+          <label class="form-label">Shop name <span style="color:var(--ink-3);font-weight:400;">(optional)</span></label>
           <input class="form-input" type="text" id="reg-shop" placeholder="e.g. Chidi's Tech Corner">
         </div>
         <div class="form-group">
-          <label class="form-label">Shop number</label>
+          <label class="form-label">Shop number <span style="color:var(--ink-3);font-weight:400;">(optional)</span></label>
           <input class="form-input" type="text" id="reg-shop-number" placeholder="e.g. Shop 12">
+        </div>
+        <div class="form-group" style="grid-column:1/-1;">
+          <label class="form-label">Shop address <span style="color:var(--ink-3);font-weight:400;">(optional)</span></label>
+          <input class="form-input" type="text" id="reg-shop-address" placeholder="e.g. Block B, ACU Mall">
         </div>
       </div>
       <div class="form-group" style="margin-top:16px;">
@@ -258,19 +266,11 @@
       <div class="id-type-grid" id="id-type-grid">
         <div class="id-type-card" data-type="school_id" onclick="selectIdType('school_id', this)">
           <span id="icon-school"></span>
-          <div><div class="id-type-label">School ID</div><div class="id-type-sub">ACU student ID card</div></div>
+          <div><div class="id-type-label">ACU School ID</div><div class="id-type-sub">Current student ID card</div></div>
         </div>
         <div class="id-type-card" data-type="nin" onclick="selectIdType('nin', this)">
           <span id="icon-nin"></span>
-          <div><div class="id-type-label">NIN Slip</div><div class="id-type-sub">National ID number slip</div></div>
-        </div>
-        <div class="id-type-card" data-type="national_id" onclick="selectIdType('national_id', this)">
-          <span id="icon-natid"></span>
-          <div><div class="id-type-label">National ID</div><div class="id-type-sub">NIMC ID card</div></div>
-        </div>
-        <div class="id-type-card" data-type="drivers_license" onclick="selectIdType('drivers_license', this)">
-          <span id="icon-dl"></span>
-          <div><div class="id-type-label">Driver's Licence</div><div class="id-type-sub">FRSC driving licence</div></div>
+          <div><div class="id-type-label">NIN</div><div class="id-type-sub">NIN slip/card</div></div>
         </div>
       </div>
     </div>
@@ -344,10 +344,10 @@
 <script src="../js/app.js"></script>
 <script>
   // Auth guard
-  if (!auth.isLoggedIn()) { window.location.href = 'auth.html'; }
+  if (!auth.isLoggedIn()) { window.location.replace('auth.html?mode=register'); }
   const user = auth.getUser();
   if (user?.registration_complete) {
-    window.location.href = user.role === 'seller' ? 'seller-dashboard.html' : 'buyer-dashboard.html';
+    window.location.replace(user.role === 'seller' ? 'seller-dashboard.html' : 'buyer-dashboard.html');
   }
 
   // ── Email verification wall ────────────────────────────────────────────────
@@ -399,8 +399,6 @@
   document.getElementById('back-icon').innerHTML  = icons.image;
   document.getElementById('icon-school').innerHTML  = icons.shield;
   document.getElementById('icon-nin').innerHTML     = icons.user;
-  document.getElementById('icon-natid').innerHTML   = icons.shield;
-  document.getElementById('icon-dl').innerHTML      = icons.settings;
   document.getElementById('info-icon').innerHTML    = icons.info;
   document.getElementById('done-check-icon').innerHTML = `<div style="width:64px;height:64px;border-radius:50%;background:rgba(34,197,94,.1);display:flex;align-items:center;justify-content:center;margin:0 auto;">${icons.check.replace('width="18" height="18"','width="28" height="28"')}</div>`;
   document.getElementById('dashboard-link').href = user?.role === 'seller' ? 'seller-dashboard.html' : 'buyer-dashboard.html';
@@ -408,6 +406,7 @@
   // Adjust for role
   if (user?.role === 'seller') {
     document.getElementById('business-name-group').style.display = 'block';
+    document.getElementById('seller-shop-fields').style.display = 'grid';
   }
 
   // Pre-fill name
@@ -554,20 +553,23 @@
     } catch (e) {
       console.warn('Failed to load hostels:', e.message);
       const select = document.getElementById('reg-hostel');
-      if (select) select.innerHTML = '<option value="">Select hostel</option><option value="Other">Other</option>';
+      if (select) select.innerHTML = '<option value="">Unable to load hostels — try again</option>';
     }
   }
 
   async function submitRegistration() {
     const name = document.getElementById('reg-fullname').value.trim();
     const business = document.getElementById('reg-business')?.value.trim() || '';
+    const level = document.getElementById('reg-level')?.value.trim() || '';
     const hostel = document.getElementById('reg-hostel')?.value.trim() || '';
     const room = document.getElementById('reg-room')?.value.trim() || '';
     const shop = document.getElementById('reg-shop')?.value.trim() || '';
     const shopNumber = document.getElementById('reg-shop-number')?.value.trim() || '';
+    const shopAddress = document.getElementById('reg-shop-address')?.value.trim() || '';
     const deliveryInfo = document.getElementById('reg-delivery-info')?.value.trim() || '';
 
     if (!name) { toast('Please enter your full name', 'error'); return; }
+    if (!level || !hostel || !room) { toast('Level, hostel and room number are required', 'error'); return; }
     if (!selectedIdType) { toast('Please select your ID type', 'error'); return; }
     if (!frontUrl) { toast('Please upload the front of your ID', 'error'); return; }
     if (!backUrl) { toast('Please upload the back of your ID', 'error'); return; }
@@ -580,9 +582,11 @@
         full_name: name,
         business_name: business,
         hostel_name: hostel,
+        level,
         room_number: room,
-        shop_name: shop,
-        shop_number: shopNumber,
+        shop_name: user?.role === 'seller' ? shop : '',
+        shop_number: user?.role === 'seller' ? shopNumber : '',
+        shop_address: user?.role === 'seller' ? shopAddress : '',
         delivery_info: deliveryInfo,
         id_type: selectedIdType,
         id_front_url: frontUrl,
@@ -593,6 +597,12 @@
       // Show done screen
       document.getElementById('step-id').style.display = 'none';
       document.getElementById('step-done').style.display = 'block';
+      if (user?.role === 'seller') {
+        document.querySelector('#step-done .reg-card-title').textContent = 'Application submitted';
+        document.querySelector('#step-done .reg-card-sub').innerHTML = 'Your seller application has been submitted for admin review. <strong>Please wait up to 6 hours.</strong> We will notify you by email and push notification when a decision is made.';
+        document.getElementById('dashboard-link').textContent = 'Return to sign in';
+        document.getElementById('dashboard-link').href = 'auth.html';
+      }
       document.getElementById('step3-el').classList.remove('active');
       document.getElementById('step3-el').classList.add('done');
 

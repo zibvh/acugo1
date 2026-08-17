@@ -142,10 +142,40 @@ async function sendOrderRefundEmail(to, { buyerName, listingTitle, reason, amoun
   });
 }
 
+async function sendSellerApplicationEmail(to, { sellerName, sellerEmail, userId }) {
+  const adminUrl = `${getBaseUrl()}/pages/admin.html`;
+  await sendMail({
+    to,
+    subject: `Seller approval needed — ${sellerName}`,
+    html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fafafa;border-radius:12px;">
+      <h2 style="color:#1a1a1a;margin-bottom:8px;">New seller application</h2>
+      <p style="color:#555;line-height:1.6;"><strong>${sellerName}</strong> (${sellerEmail}) has completed seller registration and is waiting for approval.</p>
+      <p style="color:#555;line-height:1.6;">Please review the submitted profile and identity documents within <strong>6 hours</strong>.</p>
+      <a href="${adminUrl}" style="display:inline-block;margin:18px 0;padding:12px 22px;background:#c8522a;color:white;text-decoration:none;border-radius:8px;font-weight:600;">Review seller application</a>
+      <p style="color:#999;font-size:12px;">Application ID: ${userId}</p>
+    </div>`,
+  });
+}
+
+async function sendSellerDecisionEmail(to, { sellerName, approved, reason = '' }) {
+  const subject = approved ? 'Your Bixcart seller account was approved' : 'Your Bixcart seller application was rejected';
+  await sendMail({
+    to,
+    subject,
+    html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;background:#fafafa;border-radius:12px;">
+      <h2 style="color:#1a1a1a;margin-bottom:8px;">Seller application ${approved ? 'approved' : 'rejected'}</h2>
+      <p style="color:#555;line-height:1.6;">Hi ${sellerName}, your Bixcart seller application has been <strong>${approved ? 'approved' : 'rejected'}</strong>.</p>
+      ${approved ? '<p style="color:#555;line-height:1.6;">Your seller account is now active. You can sign in and start listing products.</p>' : `<p style="color:#555;line-height:1.6;"><strong>Reason:</strong> ${reason}</p>`}
+    </div>`,
+  });
+}
+
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendOrderSellerAlertEmail,
   sendOrderRefundEmail,
+  sendSellerApplicationEmail,
+  sendSellerDecisionEmail,
   verifyTransport,
 };

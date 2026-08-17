@@ -6,6 +6,12 @@ const userSchema = new mongoose.Schema({
   full_name:       { type: String, required: true, trim: true },
   role:            { type: String, required: true, enum: ['buyer', 'seller', 'admin'] },
   account_status:  { type: String, enum: ['active', 'warned', 'suspended'], default: 'active' },
+  // Seller onboarding approval. Existing sellers default to approved for backwards compatibility.
+  seller_approval_status: { type: String, enum: ['approved','pending','rejected'], default: 'approved' },
+  seller_approval_reason: { type: String, default: '' },
+  seller_approval_requested_at: { type: Date, default: null },
+  seller_approval_reviewed_at: { type: Date, default: null },
+  seller_approval_reviewed_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   warn_reason:     { type: String, default: '' },
   suspend_reason:  { type: String, default: '' },
   warned_at:       { type: Date, default: null },
@@ -46,9 +52,11 @@ const userSchema = new mongoose.Schema({
   // Seller-specific public info for pickup and delivery
   business_name:   { type: String, default: '' },
   hostel_name:     { type: String, default: '' },
+  level:           { type: String, default: '' },
   room_number:     { type: String, default: '' },
   shop_name:       { type: String, default: '' },
   shop_number:     { type: String, default: '' },
+  shop_address:    { type: String, default: '' },
   delivery_info:   { type: String, default: '' },
   // ID verification docs (stored as Cloudinary URLs, admin reviews)
   id_type:         { type: String, default: '' }, // 'school_id' | 'nin' | 'national_id' | 'drivers_license'
@@ -227,6 +235,17 @@ orderSchema.index({ checkout_group: 1 });
 // Records each "send to selected users" action from the admin panel, for
 // audit/history purposes. The actual delivery to each user lives in that
 // user's own `admin_messages` array (see userSchema above).
+const adminActionSchema = new mongoose.Schema({
+  admin_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  admin_name: { type: String, default: '' },
+  action: { type: String, required: true },
+  target_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  target_user_name: { type: String, default: '' },
+  target_user_email: { type: String, default: '' },
+  reason: { type: String, default: '' },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { timestamps: { createdAt: 'created_at', updatedAt: false } });
+
 const broadcastSchema = new mongoose.Schema({
   title:            { type: String, default: '' },
   content:          { type: String, required: true },
@@ -295,6 +314,8 @@ async function connectDb() {
   console.log('  MongoDB connected:', mongoose.connection.host);
 }
 
+const AdminAction = mongoose.model('AdminAction', adminActionSchema);
+
 module.exports = {
   connectDb,
   User,
@@ -308,6 +329,7 @@ module.exports = {
   ConversationReport,
   Order,
   Broadcast,
+  AdminAction,
   SELLER_COMMISSION_TIERS,
   getSellerCommissionInfo,
 };

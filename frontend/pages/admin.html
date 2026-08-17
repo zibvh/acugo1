@@ -686,6 +686,14 @@ body {
     </button>
 
     <div class="admin-nav-section">Manage</div>
+    <button class="admin-nav-item" data-tab="seller-approvals">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9"/><path d="M20 12h-9"/><path d="M20 17h-9"/><circle cx="5" cy="7" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="5" cy="17" r="2"/></svg>
+      Seller Approvals
+    </button>
+    <button class="admin-nav-item" data-tab="actions">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-6"/></svg>
+      Admin Actions
+    </button>
     <button class="admin-nav-item" data-tab="users">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Users
@@ -804,7 +812,7 @@ api.patch = (path, body) => api.request('PATCH', path, body, true);
 function adminLogout() { adminAuth.clear(); window.location.replace('admin-login.html'); }
 
 // ── Tab routing ─────────────────────────────────────────────────────────────
-const TABS = { overview: 'Overview', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
+const TABS = { overview: 'Overview', 'seller-approvals': 'Seller Approvals', actions: 'Admin Actions', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
 let currentTab = 'overview';
 
 document.querySelectorAll('.admin-nav-item[data-tab]').forEach(btn => {
@@ -842,6 +850,8 @@ function switchTab(tab) {
   const content = document.getElementById('admin-content');
   content.innerHTML = '<div class="admin-empty">Loading…</div>';
   if (tab === 'overview')  renderOverview();
+  if (tab === 'seller-approvals') renderSellerApprovals();
+  if (tab === 'actions') renderAdminActions();
   if (tab === 'users')     renderUsers();
   if (tab === 'listings')  renderListings();
   if (tab === 'broadcast') renderBroadcast();
@@ -849,6 +859,52 @@ function switchTab(tab) {
   if (tab === 'messages')  renderMessages();
   if (tab === 'escrow')    renderEscrow();
   if (tab === 'flagged')   renderFlagged();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SELLER APPROVALS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderSellerApprovals() {
+  const c = document.getElementById('admin-content');
+  c.innerHTML = '<div class="admin-empty">Loading seller applications…</div>';
+  try {
+    const data = await api.get('/admin/seller-applications?status=pending&limit=100');
+    const sellers = data.sellers || [];
+    c.innerHTML = `
+      <div style="margin-bottom:18px;"><div class="section-kicker" style="margin-bottom:6px;">Seller onboarding</div><h2 style="font-size:28px;letter-spacing:-.5px;">Pending seller applications</h2><p style="color:var(--ink-3);font-size:13px;margin-top:6px;">Review identity documents and profile details before approving access. Sellers are told to allow up to 6 hours.</p></div>
+      ${sellers.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Seller</th><th>Level / Hostel / Room</th><th>ID</th><th>Submitted</th><th>Action</th></tr></thead><tbody>
+      ${sellers.map(u => `<tr>
+        <td><strong>${escHtml(u.full_name)}</strong><br><span style="font-size:12px;color:var(--ink-3);">${escHtml(u.email)}</span><br><span style="font-size:12px;">${escHtml(u.shop_name || 'No shop name')}</span></td>
+        <td>${escHtml(u.level || '—')}<br>${escHtml(u.hostel_name || '—')} · ${escHtml(u.room_number || '—')}</td>
+        <td>${escHtml(u.id_type === 'school_id' ? 'ACU School ID' : 'NIN')}<br><a href="${escHtml(u.id_front_url || '#')}" target="_blank" rel="noopener">Front</a> · <a href="${escHtml(u.id_back_url || '#')}" target="_blank" rel="noopener">Back</a></td>
+        <td>${fmtTime(u.seller_approval_requested_at)}</td>
+        <td style="white-space:nowrap;"><button class="btn btn-primary btn-sm" data-approve-seller="${u.id}">Approve</button> <button class="btn btn-ghost btn-sm" data-reject-seller="${u.id}">Reject</button></td>
+      </tr>`).join('')}</tbody></table></div>` : '<div class="admin-empty">No pending seller applications.</div>'}`;
+    c.querySelectorAll('[data-approve-seller]').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm('Approve this seller? They will be able to use the seller account immediately.')) return;
+      btn.disabled = true;
+      try { await api.post(`/admin/seller-applications/${btn.dataset.approveSeller}/approve`, {}); toast('Seller approved.', 'success'); renderSellerApprovals(); }
+      catch(e) { toast(e.message, 'error'); btn.disabled = false; }
+    }));
+    c.querySelectorAll('[data-reject-seller]').forEach(btn => btn.addEventListener('click', () => {
+      showModal({ title:'Reject seller application', sub:'A rejection reason is compulsory and will be shown to the seller.', placeholder:'Explain why this seller application is being rejected…', confirmLabel:'Reject application', confirmClass:'btn-danger', onConfirm: async reason => {
+        try { await api.post(`/admin/seller-applications/${btn.dataset.rejectSeller}/reject`, { reason }); toast('Seller rejected and notified.', 'success'); renderSellerApprovals(); }
+        catch(e) { toast(e.message, 'error'); }
+      }});
+    }));
+  } catch(e) { c.innerHTML = `<div class="admin-empty">Failed to load seller applications: ${escHtml(e.message)}</div>`; }
+}
+
+async function renderAdminActions() {
+  const c = document.getElementById('admin-content');
+  c.innerHTML = '<div class="admin-empty">Loading admin actions…</div>';
+  try {
+    const data = await api.get('/admin/actions?limit=100');
+    const actions = data.actions || [];
+    const labels = { seller_approved:'Approved seller', seller_rejected:'Rejected seller', user_warned:'Warned user', user_suspended:'Suspended user', user_unsuspended:'Restored user' };
+    c.innerHTML = `<div style="margin-bottom:18px;"><div class="section-kicker" style="margin-bottom:6px;">Audit trail</div><h2 style="font-size:28px;letter-spacing:-.5px;">Admin Actions</h2><p style="color:var(--ink-3);font-size:13px;margin-top:6px;">Every important admin action is recorded here so other administrators can see who did what and when.</p></div>
+      ${actions.length ? `<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Date</th><th>Admin</th><th>Action</th><th>Target</th><th>Reason</th></tr></thead><tbody>${actions.map(a => `<tr><td>${fmtTime(a.created_at)}</td><td><strong>${escHtml(a.admin_name)}</strong></td><td>${escHtml(labels[a.action] || a.action)}</td><td>${escHtml(a.target_user_name || a.target_user_email || '—')}</td><td>${escHtml(a.reason || '—')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="admin-empty">No admin actions recorded yet.</div>'}`;
+  } catch(e) { c.innerHTML = `<div class="admin-empty">Failed to load admin actions: ${escHtml(e.message)}</div>`; }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

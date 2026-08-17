@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { Listing, User, SavedListing, Order, CartItem } = require('../db/database');
-const { authMiddleware, optionalAuth } = require('../middleware/auth');
+const { authMiddleware, optionalAuth, sellerApprovalMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { moderateListing } = require('../utils/aiModerator');
 
@@ -219,7 +219,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 });
 
 // POST /api/listings — seller only, must have credits
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', sellerApprovalMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -278,7 +278,7 @@ router.post('/', authMiddleware, async (req, res) => {
 const EDIT_LOCK_MS = 90 * 60 * 1000; // 90 minutes
 
 // PUT /api/listings/:id
-router.put('/:id', authMiddleware, async (req, res) => {
+router.put('/:id', sellerApprovalMiddleware, async (req, res) => {
   try {
     const listing = await Listing.findById(req.params.id);
     if (!listing) return res.status(404).json({ error: 'Not found' });
@@ -311,7 +311,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 // This is a lifecycle action, not a content edit, so it's not subject to the
 // 90-minute edit lock. A sold listing immediately leaves the active
 // marketplace (GET / only returns status:'active' listings).
-router.post('/:id/mark-sold', authMiddleware, async (req, res) => {
+router.post('/:id/mark-sold', sellerApprovalMiddleware, async (req, res) => {
   try {
     const listing = await Listing.findById(req.params.id);
     if (!listing) return res.status(404).json({ error: 'Not found' });
@@ -326,7 +326,7 @@ router.post('/:id/mark-sold', authMiddleware, async (req, res) => {
 
 // POST /api/listings/:id/relist — seller undoes a "mark as sold", putting the
 // listing back on the active marketplace.
-router.post('/:id/relist', authMiddleware, async (req, res) => {
+router.post('/:id/relist', sellerApprovalMiddleware, async (req, res) => {
   try {
     const listing = await Listing.findById(req.params.id);
     if (!listing) return res.status(404).json({ error: 'Not found' });
@@ -345,7 +345,7 @@ router.post('/:id/relist', authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/listings/:id
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', sellerApprovalMiddleware, async (req, res) => {
   try {
     const listing = await Listing.findById(req.params.id);
     if (!listing) return res.status(404).json({ error: 'Not found' });

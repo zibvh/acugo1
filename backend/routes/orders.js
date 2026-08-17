@@ -2,7 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { Order, Listing, User, SavedListing, CartItem, getSellerCommissionInfo } = require('../db/database');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, sellerApprovalMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { generateVerificationCode, verifyEscrowCode, calculatePayout } = require('../utils/escrow');
 const { createTransferRecipient, initiateTransfer, createRefund, listRefunds, verifyTransaction } = require('../utils/paystack');
@@ -180,7 +180,7 @@ router.get('/buying', authMiddleware, async (req, res) => {
 });
 
 // GET /api/orders/selling
-router.get('/selling', authMiddleware, async (req, res) => {
+router.get('/selling', sellerApprovalMiddleware, async (req, res) => {
   try {
     const orders = await Order
       .find({ seller_id: req.user.id })
@@ -458,7 +458,7 @@ router.get('/:id/escrow', authMiddleware, async (req, res) => {
 });
 
 // POST /api/orders/:id/accept
-router.post('/:id/accept', authMiddleware, async (req, res) => {
+router.post('/:id/accept', sellerApprovalMiddleware, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -488,7 +488,7 @@ router.post('/:id/accept', authMiddleware, async (req, res) => {
 });
 
 // POST /api/orders/:id/mark-shipped
-router.post('/:id/mark-shipped', authMiddleware, async (req, res) => {
+router.post('/:id/mark-shipped', sellerApprovalMiddleware, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });

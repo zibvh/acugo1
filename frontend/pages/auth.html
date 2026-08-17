@@ -167,7 +167,7 @@
             <label class="form-label">Email address</label>
             <div class="input-icon-wrap">
               <span class="input-icon" id="login-email-icon"></span>
-              <input class="form-input" type="email" id="login-email" placeholder="you@acu.edu.ng" required autocomplete="email">
+              <input class="form-input" type="email" id="login-email" placeholder="you@example.com" required autocomplete="email">
             </div>
           </div>
           <div class="form-group">
@@ -204,7 +204,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">Email address</label>
-            <input class="form-input" type="email" id="reg-email" placeholder="you@acu.edu.ng" required autocomplete="email">
+            <input class="form-input" type="email" id="reg-email" placeholder="you@example.com" required autocomplete="email">
           </div>
           <div class="form-group">
             <label class="form-label">Password</label>
@@ -260,7 +260,7 @@
         <form class="auth-form" id="forgot-form">
           <div class="form-group">
             <label class="form-label">Email address</label>
-            <input class="form-input" type="email" id="forgot-email" placeholder="you@acu.edu.ng" required autocomplete="email">
+            <input class="form-input" type="email" id="forgot-email" placeholder="you@example.com" required autocomplete="email">
           </div>
           <button type="submit" class="btn btn-primary btn-lg w-full" id="forgot-btn">Send reset link</button>
         </form>
@@ -364,8 +364,8 @@
   function showOnly(id) {
     VIEWS.forEach(v => document.getElementById(v).style.display = v === id ? 'block' : 'none');
   }
-  function showLogin()    { showOnly('login-view');    history.replaceState({}, '', window.location.pathname); }
-  function showRegister() { showOnly('register-view'); history.replaceState({}, '', '?mode=register'); }
+  function showLogin()    { showOnly('login-view');    history.replaceState({ bixAuth: true }, '', window.location.pathname); }
+  function showRegister() { showOnly('register-view'); history.replaceState({ bixAuth: true }, '', '?mode=register'); }
   function showForgot()   { showOnly('forgot-view'); }
 
   // ── Role picker ────────────────────────────────────────────────────────────
@@ -448,7 +448,7 @@
   if (!action && !getParam('mode')) {
     if (auth.isLoggedIn()) {
       const u = auth.getUser();
-      if (!u?.registration_complete) window.location.href = 'register.html';
+      if (!u?.registration_complete) window.location.replace('register.html');
       else window.location.href = u?.role === 'seller' ? 'seller-dashboard.html' : 'buyer-dashboard.html';
     }
   }
@@ -466,12 +466,12 @@
       auth.save(data.token, data.user);
       toast('Welcome back!', 'success');
       const redirect = getParam('redirect');
-      if (redirect) { setTimeout(() => window.location.href = redirect, 400); return; }
+      if (redirect) { setTimeout(() => window.location.replace(redirect), 400); return; }
       const dest = !data.user.registration_complete
         ? 'register.html'
         : (data.user.role === 'seller' ? 'seller-dashboard.html'
           : data.user.role === 'admin' ? 'admin.html' : 'buyer-dashboard.html');
-      setTimeout(() => window.location.href = dest, 600);
+      setTimeout(() => window.location.replace(dest), 600);
     } catch (err) {
       toast(err.message, 'error');
       btn.disabled = false; btn.textContent = 'Sign in';
@@ -487,11 +487,14 @@
     const confirm   = document.getElementById('reg-confirm-password').value;
     if (password !== confirm) { toast('Passwords do not match', 'error'); return; }
 
+    const email = document.getElementById('reg-email').value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(email)) { toast('Please enter a valid email address.', 'error'); return; }
+
     const btn = document.getElementById('register-btn');
     btn.disabled = true; btn.textContent = 'Creating account…';
     try {
       const data = await api.post('/auth/register', {
-        email:            document.getElementById('reg-email').value.trim(),
+        email,
         password,
         confirm_password: confirm,
         full_name: `${document.getElementById('reg-firstname').value.trim()} ${document.getElementById('reg-lastname').value.trim()}`,
@@ -499,7 +502,7 @@
       }, false);
       auth.save(data.token, data.user);
       toast('Welcome to Bixcart! Check your email to verify your account.', 'success');
-      setTimeout(() => window.location.href = 'register.html', 900);
+      setTimeout(() => window.location.replace('register.html'), 500);
     } catch (err) {
       toast(err.message, 'error');
       btn.disabled = false; btn.textContent = 'Create account';

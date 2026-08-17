@@ -1,11 +1,27 @@
 const express = require('express');
 const router  = express.Router();
-const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel } = require('../db/database');
+const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel, AdminAction } = require('../db/database');
 const { adminMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
+const { sendSellerDecisionEmail } = require('../utils/email');
 
 // All admin routes require admin role
 router.use(adminMiddleware);
+
+async function logAdminAction(req, action, target = null, reason = '', metadata = {}) {
+  const admin = await User.findById(req.user.id).select('full_name email').lean();
+  return AdminAction.create({
+    admin_id: req.user.id,
+    admin_name: admin?.full_name || admin?.email || 'Admin',
+    action,
+    target_user_id: target?._id || null,
+    target_user_name: target?.full_name || '',
+    target_user_email: target?.email || '',
+    reason: reason || '',
+    metadata,
+  });
+}
+
 
 // ── STATS ────────────────────────────────────────────────────────────────────
 // GET /api/admin/stats
@@ -35,6 +51,78 @@ router.get('/stats', async (req, res) => {
       totalConversations, totalMessages,
       totalOrders, suspendedUsers, warnedUsers, pendingReports,
     });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── SELLER APPROVALS ─────────────────────────────────────────────────────────
+router.get('/seller-applications', async (req, res) => {
+  try {
+    const { status = 'pending', page = 1, limit = 20 } = req.query;
+    const filter = { role: 'seller' };
+    if (status !== 'all') filter.seller_approval_status = status;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [total, sellers] = await Promise.all([
+      User.countDocuments(filter),
+      User.find(filter).select('-password_hash -push_subscriptions -used_payment_refs').sort({ seller_approval_requested_at: -1, created_at: -1 }).skip(skip).limit(parseInt(limit)).lean(),
+    ]);
+    res.json({ sellers: sellers.map(u => ({ ...u, id: u._id })), total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/seller-applications/:id/approve', async (req, res) => {
+  try {
+    const seller = await User.findOne({ _id: req.params.id, role: 'seller' });
+    if (!seller) return res.status(404).json({ error: 'Seller not found' });
+    if (!seller.registration_complete) return res.status(400).json({ error: 'Seller has not completed registration' });
+    if (seller.seller_approval_status === 'approved') return res.status(409).json({ error: 'Seller is already approved' });
+
+    seller.seller_approval_status = 'approved';
+    seller.seller_approval_reason = '';
+    seller.seller_approval_reviewed_at = new Date();
+    seller.seller_approval_reviewed_by = req.user.id;
+    await seller.save();
+
+    await logAdminAction(req, 'seller_approved', seller, '', { application_id: String(seller._id) });
+    await notifyUser(String(seller._id), { title: '✅ Seller account approved', body: 'Your Bixcart seller account has been approved. You can now sign in and start selling.', type: 'seller_approval', url: '/pages/seller-dashboard.html' }).catch(() => {});
+    sendSellerDecisionEmail(seller.email, { sellerName: seller.full_name, approved: true }).catch(err => console.error('[email] seller approval email failed:', err.message));
+
+    res.json({ success: true, user: { ...seller.toObject(), id: seller._id } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/seller-applications/:id/reject', async (req, res) => {
+  try {
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'Rejection reason is required' });
+    const seller = await User.findOne({ _id: req.params.id, role: 'seller' });
+    if (!seller) return res.status(404).json({ error: 'Seller not found' });
+    if (seller.seller_approval_status === 'approved') return res.status(409).json({ error: 'Approved sellers cannot be rejected from this workflow' });
+
+    seller.seller_approval_status = 'rejected';
+    seller.seller_approval_reason = reason;
+    seller.seller_approval_reviewed_at = new Date();
+    seller.seller_approval_reviewed_by = req.user.id;
+    await seller.save();
+
+    await logAdminAction(req, 'seller_rejected', seller, reason, { application_id: String(seller._id) });
+    await notifyUser(String(seller._id), { title: 'Seller application rejected', body: `Your seller application was rejected. Reason: ${reason}`, type: 'seller_approval', url: '/pages/auth.html' }).catch(() => {});
+    sendSellerDecisionEmail(seller.email, { sellerName: seller.full_name, approved: false, reason }).catch(err => console.error('[email] seller rejection email failed:', err.message));
+
+    res.json({ success: true, user: { ...seller.toObject(), id: seller._id } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── ADMIN ACTIONS ────────────────────────────────────────────────────────────
+router.get('/actions', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || 50)));
+    const skip = (page - 1) * limit;
+    const [total, actions] = await Promise.all([
+      AdminAction.countDocuments(),
+      AdminAction.find().sort({ created_at: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+    res.json({ actions: actions.map(a => ({ ...a, id: a._id })), total, page, pages: Math.ceil(total / limit) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -109,6 +197,7 @@ router.post('/users/:id/warn', async (req, res) => {
       { new: true }
     ).select('-password_hash -push_subscriptions').lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
+    await logAdminAction(req, 'user_warned', user, reason);
     res.json({ ...user, id: user._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -124,6 +213,7 @@ router.post('/users/:id/suspend', async (req, res) => {
       { new: true }
     ).select('-password_hash -push_subscriptions').lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
+    await logAdminAction(req, 'user_suspended', user, reason);
     res.json({ ...user, id: user._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -137,6 +227,7 @@ router.post('/users/:id/unsuspend', async (req, res) => {
       { new: true }
     ).select('-password_hash -push_subscriptions').lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
+    await logAdminAction(req, 'user_unsuspended', user);
     res.json({ ...user, id: user._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -168,6 +259,7 @@ router.post('/users/:id/message', async (req, res) => {
       },
     });
 
+    await logAdminAction(req, 'user_messaged', user, message.trim(), { title: (title || '').trim() });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -187,6 +279,7 @@ router.delete('/users/:id', async (req, res) => {
     await Conversation.deleteMany({ _id: { $in: convIds } });
     // Delete user
     await User.findByIdAndDelete(user._id);
+    await logAdminAction(req, 'user_deleted', user, '', { role: user.role });
 
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -356,6 +449,7 @@ router.post('/broadcast', async (req, res) => {
       }).catch(() => {});
     });
 
+    await logAdminAction(req, 'broadcast_sent', null, '', { broadcast_id: String(broadcast._id), recipient_count: validIds.length, title: (title || '').trim() });
     res.json({ success: true, recipient_count: validIds.length, broadcast_id: broadcast._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -659,6 +753,7 @@ router.post('/conversations/:reportId/notify', async (req, res) => {
     });
 
     const { notifyUser } = require('../db/push');
+const { sendSellerDecisionEmail } = require('../utils/email');
     notifyUser(String(user_id), {
       title: '📣 Admin Notice',
       body: message.trim().slice(0, 100),

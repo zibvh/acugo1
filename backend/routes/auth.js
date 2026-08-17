@@ -4,9 +4,10 @@ const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
 const crypto     = require('crypto');
 const rateLimit  = require('express-rate-limit');
-const { User, Order, Listing, Waitlist, Hostel } = require('../db/database');
+const { User, Order, Listing, Waitlist, Hostel, AdminAction } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
-const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
+const { sendVerificationEmail, sendPasswordResetEmail, sendSellerApplicationEmail, sendSellerDecisionEmail } = require('../utils/email');
+const { notifyUser } = require('../db/push');
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
@@ -71,6 +72,10 @@ router.post('/register', authLimiter, async (req, res) => {
     if (!['buyer', 'seller'].includes(role))
       return res.status(400).json({ error: 'Role must be buyer or seller' });
 
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+
     // Password strength
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -79,7 +84,7 @@ router.post('/register', authLimiter, async (req, res) => {
     if (password !== confirm_password)
       return res.status(400).json({ error: 'Passwords do not match' });
 
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(409).json({ error: 'Email already registered' });
 
     const verifyToken   = randomToken();
@@ -96,9 +101,11 @@ router.post('/register', authLimiter, async (req, res) => {
     }
 
     const user = await User.create({
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       full_name,
       role,
+      seller_approval_status: role === 'seller' ? 'pending' : 'approved',
+      seller_approval_reason: '',
       password_hash:         bcrypt.hashSync(password, 12),
       listing_credits:       listingCredits,
       registration_complete: false,
@@ -138,6 +145,24 @@ router.post('/login', authLimiter, async (req, res) => {
 
     if (user.account_status === 'suspended')
       return res.status(403).json({ error: 'Your account has been suspended. Contact support for assistance.' });
+
+    if (user.role === 'seller' && user.seller_approval_status === 'pending') {
+      return res.status(403).json({
+        code: 'SELLER_APPROVAL_PENDING',
+        error: 'Your seller account is awaiting admin approval. Please allow up to 6 hours.',
+        approval_status: 'pending',
+        user: safeUser(user),
+      });
+    }
+    if (user.role === 'seller' && user.seller_approval_status === 'rejected') {
+      return res.status(403).json({
+        code: 'SELLER_APPROVAL_REJECTED',
+        error: 'Your seller application was rejected.',
+        approval_status: 'rejected',
+        reason: user.seller_approval_reason || 'No reason provided.',
+        user: safeUser(user),
+      });
+    }
 
     res.json({ token: signToken(user), user: safeUser(user) });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -299,8 +324,10 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
       full_name,
       business_name,
       hostel_name,
+      level,
       room_number,
       shop_name,
+      shop_address,
       shop_number,
       delivery_info,
       id_type,
@@ -308,26 +335,56 @@ router.put('/complete-registration', authMiddleware, async (req, res) => {
       id_back_url,
     } = req.body;
 
-    if (!full_name || !id_type || !id_front_url || !id_back_url)
-      return res.status(400).json({ error: 'Full name, ID type and both ID photos are required' });
+    const current = await User.findById(req.user.id);
+    if (!current) return res.status(404).json({ error: 'User not found' });
 
+    const allowedIdTypes = ['school_id', 'nin'];
+    if (!full_name || !level || !hostel_name || !room_number || !id_type || !id_front_url || !id_back_url)
+      return res.status(400).json({ error: 'Full name, level, hostel, room number, ID type and both ID photos are required' });
+    if (!allowedIdTypes.includes(id_type))
+      return res.status(400).json({ error: 'Only ACU School ID and NIN are accepted' });
+    const allowedLevels = ['100 Level','200 Level','300 Level','400 Level','500 Level'];
+    if (!allowedLevels.includes(String(level).trim())) return res.status(400).json({ error: 'Please select a valid level' });
+    const validHostel = await Hostel.findOne({ name: String(hostel_name).trim(), is_active: { $ne: false } }).lean();
+    if (!validHostel) return res.status(400).json({ error: 'Please select a valid hostel from the approved hostel list' });
     const update = {
-      full_name,
+      full_name: String(full_name).trim(),
+      level: String(level).trim(),
+      hostel_name: String(hostel_name).trim(),
+      room_number: String(room_number).trim(),
       id_type,
       id_front_url,
       id_back_url,
       registration_complete: true,
-      hostel_name: hostel_name || '',
-      room_number: room_number || '',
-      shop_name: shop_name || '',
-      shop_number: shop_number || '',
       delivery_info: delivery_info || '',
     };
-    if (business_name !== undefined) update.business_name = business_name;
+    // Only sellers may set shop/business fields.
+    if (current.role === 'seller') {
+      update.business_name = String(business_name || '').trim();
+      update.shop_name = String(shop_name || '').trim();
+      update.shop_number = String(shop_number || '').trim();
+      update.shop_address = String(shop_address || '').trim();
+      update.seller_approval_status = 'pending';
+      update.seller_approval_reason = '';
+      update.seller_approval_requested_at = new Date();
+      update.seller_approval_reviewed_at = null;
+      update.seller_approval_reviewed_by = null;
+    } else {
+      update.business_name = '';
+      update.shop_name = '';
+      update.shop_number = '';
+      update.shop_address = '';
+    }
 
     const user = await User.findByIdAndUpdate(
       req.user.id, { $set: update }, { new: true }
     ).select('-password_hash -email_verify_token -password_reset_token');
+
+    if (current.role === 'seller') {
+      // Notify every admin that a seller application is ready for review.
+      const admins = await User.find({ role: 'admin' }).select('email full_name').lean();
+      await Promise.all(admins.map(a => sendSellerApplicationEmail(a.email, { sellerName: user.full_name, sellerEmail: user.email, userId: user._id })).map(p => p.catch(err => console.error('[email] seller application notice failed:', err.message))));
+    }
 
     const obj = user.toObject(); obj.id = obj._id;
     res.json(obj);
@@ -342,8 +399,10 @@ router.put('/profile', authMiddleware, async (req, res) => {
       bio,
       business_name,
       hostel_name,
+      level,
       room_number,
       shop_name,
+      shop_address,
       shop_number,
       delivery_info,
       university,
@@ -354,11 +413,16 @@ router.put('/profile', authMiddleware, async (req, res) => {
     const fixedUniversity = 'Ajayi Crowther University';
     const fixedLocation = 'Ajegunle, Oyo, Oyo State';
     const update = { full_name, bio };
-    if (business_name !== undefined) update.business_name = business_name;
+    const currentProfileUser = await User.findById(req.user.id).select('role').lean();
+    if (business_name !== undefined && currentProfileUser?.role === 'seller') update.business_name = business_name;
     if (hostel_name !== undefined) update.hostel_name = hostel_name;
+    if (level !== undefined) update.level = level;
     if (room_number !== undefined) update.room_number = room_number;
-    if (shop_name !== undefined) update.shop_name = shop_name;
-    if (shop_number !== undefined) update.shop_number = shop_number;
+    if (currentProfileUser?.role === 'seller') {
+      if (shop_name !== undefined) update.shop_name = shop_name;
+      if (shop_number !== undefined) update.shop_number = shop_number;
+      if (shop_address !== undefined) update.shop_address = shop_address;
+    }
     if (delivery_info !== undefined) update.delivery_info = delivery_info;
     update.university = fixedUniversity;
     update.location = (typeof location === 'string' && location.trim()) ? location.trim() : fixedLocation;
