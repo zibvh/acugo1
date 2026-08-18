@@ -14,9 +14,18 @@ async function paystackRequest(path, options = {}) {
     },
   });
 
-  const data = await res.json();
+  let data;
+  const raw = await res.text();
+  try { data = raw ? JSON.parse(raw) : {}; }
+  catch { data = { message: raw || 'Paystack returned an invalid response' }; }
   if (!res.ok || !data.status) {
-    throw new Error(data.message || 'Paystack request failed');
+    const error = new Error(data.message || 'Paystack request failed');
+    error.paystack_status = data.status ?? false;
+    error.paystack_code = data.code || null;
+    error.paystack_http_status = res.status;
+    error.paystack_data = data.data ?? null;
+    error.paystack_response = data;
+    throw error;
   }
 
   return data.data;
@@ -51,9 +60,18 @@ async function createTransferRecipient({ type = 'nuban', name, account_number, b
 }
 
 async function initiateTransfer({ source = 'balance', amount, recipient, reference, reason = '', currency = 'NGN' }) {
+  const amountNaira = Number(amount);
+  if (!Number.isFinite(amountNaira) || amountNaira <= 0) throw new Error('Invalid seller payout amount');
+  if (!recipient) throw new Error('Seller payout recipient is missing');
+  if (!reference || !/^[a-z0-9_-]{16,50}$/.test(reference)) throw new Error('Invalid Paystack transfer reference');
+
+  // Paystack expects the smallest currency unit for NGN transfers.
+  const amountKobo = Math.round(amountNaira * 100);
+  if (amountKobo <= 0) throw new Error('Seller payout amount is too small');
+
   return paystackRequest('/transfer', {
     method: 'POST',
-    body: JSON.stringify({ source, amount: Math.round(Number(amount) * 100), recipient, reference, reason, currency }),
+    body: JSON.stringify({ source, amount: amountKobo, recipient, reference, reason, currency }),
   });
 }
 

@@ -12,7 +12,7 @@ const app = express();
 app.set('trust proxy', 1);
 
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
-app.use(express.json());
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = Buffer.from(buf); } }));
 app.use(express.urlencoded({ extended: true }));
 
 // Record authenticated, state-changing user actions without storing request bodies/passwords.

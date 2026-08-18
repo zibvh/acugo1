@@ -8,7 +8,7 @@ const { Listing, Conversation, Message, Order, User } = require('../db/database'
 const { moderateListing, moderateMessage } = require('./aiModerator');
 const { notifyUser } = require('../db/push');
 const { sendOrderRefundEmail } = require('./email');
-const { listRefunds } = require('./paystack');
+const { listRefunds, createRefund } = require('./paystack');
 const ordersRouter = require('../routes/orders');
 const cancelOrderAndRefund = ordersRouter.cancelOrderAndRefund;
 const fetch = require('node-fetch');
@@ -75,6 +75,70 @@ async function syncRefundStatuses() {
       await Order.findByIdAndUpdate(order._id, { $set: update });
     } catch (e) {
       console.error(`[refunds] Failed to sync ${order._id}:`, e.message);
+    }
+  }
+}
+
+async function retryFailedRefunds() {
+  const orders = await Order.find({
+    status: 'cancelled',
+    payment_reference: { $ne: null },
+    payment_status: 'paid',
+    refund_status: 'pending',
+  }).limit(50);
+  if (!orders.length) return;
+
+  for (const order of orders) {
+    try {
+      const existing = await listRefunds({ transaction: order.payment_reference, perPage: 100 });
+      const own = (Array.isArray(existing) ? existing : []).find(r =>
+        String(r.merchant_note || '').includes(String(order._id)) &&
+        ['pending','processing','needs-attention','processed'].includes(String(r.status))
+      );
+      if (own) {
+        order.refund_status = String(own.status);
+        order.refund_reference = own.id ? String(own.id) : (own.refund_reference || null);
+        if (own.status === 'processed') order.payment_status = 'refunded';
+        await order.save();
+        continue;
+      }
+
+      const refund = await createRefund({
+        transaction: order.payment_reference,
+        amount: order.amount,
+        customer_note: `Bixcart refund retry for cancelled order ${order._id}`,
+        merchant_note: `Bixcart order ${order._id} cancellation refund retry`,
+      });
+
+      order.refund_amount = Number(order.amount || 0);
+      order.refund_reference = refund?.id ? String(refund.id) : (refund?.refund_reference || null);
+      order.refund_status = ['pending','processing','needs-attention','processed'].includes(String(refund?.status)) ? String(refund.status) : 'pending';
+      order.refund_error = '';
+      order.refund_initiated_at = new Date();
+      if (order.refund_status === 'processed') order.payment_status = 'refunded';
+      await order.save();
+
+      const listing = await Listing.findById(order.listing_id).select('title').lean();
+      await notifyUser(String(order.buyer_id), {
+        title: 'Refund initiated',
+        body: `Your refund for ${listing?.title || 'your cancelled order'} has now been initiated by Paystack. It will be returned through the supported refund route.`,
+        type: 'refund',
+        url: `/pages/orders.html?id=${order._id}`,
+      }).catch(() => {});
+
+      const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
+      if (buyer?.email) {
+        await sendOrderRefundEmail(buyer.email, {
+          buyerName: buyer.full_name || 'buyer',
+          listingTitle: listing?.title || 'your item',
+          reason: 'Your refund is being processed and will be returned through the original payment method.',
+          amount: order.amount,
+          refundStatus: order.refund_status,
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.error(`[refund-retry] ${order._id}:`, e.message);
+      await Order.findByIdAndUpdate(order._id, { $set: { refund_error: e.message || 'Refund retry failed' } }).catch(() => {});
     }
   }
 }
@@ -233,10 +297,12 @@ function startSweepScheduler() {
   setTimeout(() => {
     sweepExpiredOrders().catch(e => console.error('[orders] Initial expiry sweep failed:', e.message));
     syncRefundStatuses().catch(e => console.error('[refunds] Initial sync failed:', e.message));
+    retryFailedRefunds().catch(e => console.error('[refund-retry] Initial retry failed:', e.message));
   }, 15 * 1000);
   setInterval(() => {
     sweepExpiredOrders().catch(e => console.error('[orders] Expiry sweep failed:', e.message));
     syncRefundStatuses().catch(e => console.error('[refunds] Sync failed:', e.message));
+    retryFailedRefunds().catch(e => console.error('[refund-retry] Retry failed:', e.message));
   }, ORDER_SWEEP_INTERVAL_MS);
   console.log('[orders] Deadline/refund scheduler started — checks every 60s');
 

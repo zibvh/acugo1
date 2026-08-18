@@ -63,7 +63,7 @@ async function initiateOrderRefund(order, reason) {
     const existingKobo = existing.reduce((sum, r) => sum + Number(r.amount || 0), 0);
     const remainingKobo = transactionKobo - existingKobo;
     if (remainingKobo < amountKobo) {
-      throw new Error(`Insufficient refundable balance on Paystack transaction ${fresh.payment_reference}`);
+      throw new Error(`Refund amount exceeds the remaining refundable amount on Paystack transaction ${fresh.payment_reference}`);
     }
     let refund;
     try {
@@ -74,10 +74,18 @@ async function initiateOrderRefund(order, reason) {
         merchant_note: `Bixcart order ${fresh._id} cancelled: ${reason}`,
       });
     } catch (error) {
-      fresh.refund_status = 'failed';
+      // Paystack refunds are funded from the merchant's Paystack balance/pending
+      // payout. If that balance is temporarily insufficient, the order should
+      // still be cancelled, but the refund must remain pending/failed rather than
+      // falsely telling the buyer that a refund was initiated.
+      fresh.refund_status = 'pending';
       fresh.refund_error = error.message || 'Paystack refund request failed';
+      fresh.refund_amount = Number(fresh.amount || 0);
+      fresh.payment_status = 'paid';
+      fresh.payout_status = 'refunded';
       await fresh.save();
-      throw error;
+      Object.assign(order, fresh.toObject());
+      return { initiated: false, pending: true, skipped: false, status: 'pending', error: fresh.refund_error };
     }
     fresh.refund_amount = Number(fresh.amount || 0);
     fresh.refund_reference = refund?.id ? String(refund.id) : (refund?.refund_reference || null);
@@ -328,103 +336,166 @@ router.post('/initialize-payment', authMiddleware, async (req, res) => {
   }
 });
 
+// Finalize a Paystack checkout exactly once. This is shared by the browser callback
+// and the Paystack webhook so a successful payment cannot get stuck just because the
+// buyer's browser failed to call /checkout.
+async function finalizeCheckoutPayment({ payment_reference, buyerId }) {
+  const intent = await CheckoutIntent.findOne({ reference: payment_reference, buyer_id: buyerId });
+  if (!intent) throw new Error('Payment session not found');
+  if (intent.expires_at < new Date() && !intent.used_at) throw new Error('Payment session expired. Please start checkout again.');
+
+  // Idempotency: if the webhook/callback already created the orders, return them.
+  const existingOrders = await Order.find({ payment_reference, buyer_id: buyerId }).lean();
+  if (existingOrders.length) {
+    if (!intent.used_at) {
+      intent.used_at = new Date();
+      await intent.save();
+    }
+    return {
+      checkout_group: existingOrders[0].checkout_group,
+      order_count: existingOrders.length,
+      total: existingOrders.reduce((sum, o) => sum + Number(o.amount || 0), 0),
+      orders: existingOrders.map(o => ({ ...o, id: o._id })),
+      already_finalized: true,
+    };
+  }
+
+  const transaction = await verifyTransaction(payment_reference);
+  if (!transaction || transaction.status !== 'success') throw new Error('Payment not verified');
+
+  // For a normal Bixcart checkout, the actual amount charged must equal the
+  // immutable amount that Bixcart requested. `requested_amount` is useful for
+  // diagnostics, but the security check must use the actual charged `amount`.
+  const chargedKobo = Number(transaction.amount || 0);
+  const expectedKobo = Number(intent.expected_total_kobo || 0);
+  if (!Number.isFinite(chargedKobo) || chargedKobo !== expectedKobo) {
+    console.error('[checkout] Payment amount mismatch', {
+      reference: payment_reference,
+      expected_kobo: expectedKobo,
+      charged_kobo: transaction.amount,
+      requested_kobo: transaction.requested_amount,
+    });
+    throw new Error('Payment amount does not match the checkout total');
+  }
+
+  const listingIds = intent.items.flatMap(i => i.listing_ids || []);
+  const listings = await Listing.find({ _id: { $in: listingIds }, status: 'active' }).lean();
+  if (listings.length !== listingIds.length) {
+    await createRefund({
+      transaction: payment_reference,
+      amount: Number(intent.expected_total_kobo) / 100,
+      customer_note: 'Bixcart checkout could not be completed because an item became unavailable.',
+      merchant_note: `Bixcart automatic full refund for checkout ${intent._id}`,
+    });
+    throw new Error('One or more items became unavailable. Your refund has been initiated automatically.');
+  }
+
+  const listingMap = new Map(listings.map(l => [String(l._id), l]));
+  const checkout_group = uuidv4();
+  const escrowCode = generateVerificationCode();
+  const ordersToCreate = [];
+  for (const item of intent.items) {
+    for (const listingId of item.listing_ids) {
+      const listing = listingMap.get(String(listingId));
+      const amount = Number(listing.price || 0);
+      const deliveryMinutes = { '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '7d': 10080 }[listing.delivery_window || '1d'] || 1440;
+      ordersToCreate.push({
+        listing_id: listing._id, buyer_id: buyerId, seller_id: listing.seller_id, amount,
+        status: 'paid', escrow_status: 'held', escrow_code: escrowCode,
+        escrow_code_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        response_deadline_at: new Date(Date.now() + 6 * 60 * 60 * 1000),
+        delivery_deadline_at: new Date(Date.now() + deliveryMinutes * 60 * 1000),
+        platform_fee_percent: item.commission_percent,
+        platform_fee_amount: Number((amount * item.commission_percent / 100).toFixed(2)),
+        seller_payout_amount: Number((amount * (1 - item.commission_percent / 100)).toFixed(2)),
+        checkout_group, fulfillment: 'delivery', delivery_address: intent.delivery_address,
+        delivery_fee: 0, payment_method: 'card', payment_status: 'paid', payment_reference,
+        processing_fee_amount: 0, seller_processing_fee_share: 0,
+      });
+    }
+  }
+
+  // Protect against a second finalization racing the first one.
+  const alreadyUsed = await User.findOne({ used_payment_refs: payment_reference });
+  if (alreadyUsed && String(alreadyUsed._id) === String(buyerId)) {
+    const raced = await Order.find({ payment_reference, buyer_id: buyerId }).lean();
+    if (raced.length) {
+      intent.used_at = intent.used_at || new Date();
+      await intent.save();
+      return {
+        checkout_group: raced[0].checkout_group,
+        order_count: raced.length,
+        total: raced.reduce((sum, o) => sum + Number(o.amount || 0), 0),
+        orders: raced.map(o => ({ ...o, id: o._id })),
+        already_finalized: true,
+      };
+    }
+    throw new Error('Payment reference already used');
+  }
+
+  let orders;
+  try {
+    orders = await Order.insertMany(ordersToCreate);
+    await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'pending' } });
+  } catch (creationError) {
+    await createRefund({
+      transaction: payment_reference,
+      amount: Number(intent.expected_total_kobo) / 100,
+      customer_note: 'Bixcart could not complete your order after payment.',
+      merchant_note: `Bixcart automatic full refund for checkout ${intent._id}: ${creationError.message}`,
+    }).catch(() => {});
+    await Order.deleteMany({ _id: { $in: orders?.map(o => o._id) || [] } }).catch(() => {});
+    await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'active' } }).catch(() => {});
+    throw creationError;
+  }
+
+  await CartItem.deleteMany({ user_id: buyerId, listing_id: { $in: listingIds } });
+  await User.findByIdAndUpdate(buyerId, { $addToSet: { used_payment_refs: payment_reference } });
+  intent.used_at = new Date();
+  await intent.save();
+
+  const buyer = await User.findById(buyerId).select('full_name email').lean();
+  for (const order of orders) {
+    const sellerId = String(order.seller_id);
+    const seller = await User.findById(sellerId).select('email full_name').lean();
+    const listing = await Listing.findById(order.listing_id).select('title delivery_window').lean();
+    await notifyUser(sellerId, {
+      title: 'Payment received',
+      body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.',
+      type: 'escrow', url: `/pages/messages.html?conv=${order._id}`,
+    }).catch(() => {});
+    if (seller?.email) await sendOrderSellerAlertEmail(seller.email, {
+      buyerName: buyer?.full_name || 'A buyer',
+      listingTitle: listing?.title || 'your item',
+      orderId: String(order._id),
+      deliveryWindow: listing?.delivery_window || '1d',
+    }).catch(() => {});
+  }
+
+  return {
+    checkout_group,
+    order_count: orders.length,
+    total: orders.reduce((sum, o) => sum + o.amount, 0),
+    orders: orders.map(o => ({ ...o.toObject(), id: o._id })),
+    already_finalized: false,
+  };
+}
+
 // POST /api/orders/checkout — finalizes a verified Paystack payment using the
-// server-created checkout intent. The browser cannot alter the split or amounts.
+// server-created checkout intent. This endpoint is idempotent.
 router.post('/checkout', authMiddleware, async (req, res) => {
   try {
-    const { delivery_address, payment_reference } = req.body;
+    const { payment_reference } = req.body;
     if (!payment_reference) return res.status(400).json({ error: 'payment_reference is required' });
-
-    const intent = await CheckoutIntent.findOne({ reference: payment_reference, buyer_id: req.user.id, used_at: null });
-    if (!intent) return res.status(400).json({ error: 'Payment session not found or already used' });
-    if (intent.expires_at < new Date()) return res.status(400).json({ error: 'Payment session expired. Please start checkout again.' });
-
-    const transaction = await verifyTransaction(payment_reference);
-    if (!transaction || transaction.status !== 'success') return res.status(400).json({ error: 'Payment not verified' });
-
-    // Paystack can return both `amount` (the amount actually charged) and
-    // `requested_amount` (the amount Bixcart asked Paystack to charge).
-    // For a normal Bixcart checkout, our security check must compare the
-    // requested amount to the immutable CheckoutIntent total. Using only
-    // `transaction.amount` can reject a legitimate payment when Paystack's
-    // final charged amount differs from the requested amount (for example,
-    // in payment flows where Paystack adjusts the charged amount).
-    const verifiedRequestedKobo = Number(transaction.requested_amount ?? transaction.amount ?? 0);
-    const expectedKobo = Number(intent.expected_total_kobo || 0);
-    if (!Number.isFinite(verifiedRequestedKobo) || verifiedRequestedKobo !== expectedKobo) {
-      console.error('[checkout] Payment amount mismatch', {
-        reference: payment_reference,
-        expected_kobo: expectedKobo,
-        requested_kobo: transaction.requested_amount,
-        charged_kobo: transaction.amount,
-      });
-      return res.status(400).json({ error: 'Payment amount does not match the checkout total' });
-    }
-
-    const listingIds = intent.items.flatMap(i => i.listing_ids || []);
-    const listings = await Listing.find({ _id: { $in: listingIds }, status: 'active' }).lean();
-    if (listings.length !== listingIds.length) {
-      await createRefund({ transaction: payment_reference, amount: Number(intent.expected_total_kobo) / 100, customer_note: 'Bixcart checkout could not be completed because an item became unavailable.', merchant_note: `Bixcart automatic full refund for checkout ${intent._id}` }).catch(() => {});
-      return res.status(409).json({ error: 'One or more items became unavailable. Your refund has been initiated automatically.' });
-    }
-
-    const listingMap = new Map(listings.map(l => [String(l._id), l]));
-    const checkout_group = uuidv4();
-    const escrowCode = generateVerificationCode();
-    const ordersToCreate = [];
-    for (const item of intent.items) {
-      for (const listingId of item.listing_ids) {
-        const listing = listingMap.get(String(listingId));
-        const amount = Number(listing.price || 0);
-        const deliveryMinutes = { '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '7d': 10080 }[listing.delivery_window || '1d'] || 1440;
-        ordersToCreate.push({
-          listing_id: listing._id, buyer_id: req.user.id, seller_id: listing.seller_id, amount,
-          status: 'paid', escrow_status: 'held', escrow_code: escrowCode,
-          escrow_code_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          response_deadline_at: new Date(Date.now() + 6 * 60 * 60 * 1000),
-          delivery_deadline_at: new Date(Date.now() + deliveryMinutes * 60 * 1000),
-          platform_fee_percent: item.commission_percent,
-          platform_fee_amount: Number((amount * item.commission_percent / 100).toFixed(2)),
-          seller_payout_amount: Number((amount * (1 - item.commission_percent / 100)).toFixed(2)),
-          checkout_group, fulfillment: 'delivery', delivery_address: intent.delivery_address,
-          delivery_fee: 0, payment_method: 'card', payment_status: 'paid', payment_reference,
-          processing_fee_amount: 0, seller_processing_fee_share: 0,
-        });
-      }
-    }
-
-    const alreadyUsed = await User.findOne({ used_payment_refs: payment_reference });
-    if (alreadyUsed) return res.status(409).json({ error: 'Payment reference already used' });
-
-    let orders;
-    try {
-      orders = await Order.insertMany(ordersToCreate);
-      await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'pending' } });
-    } catch (creationError) {
-      await createRefund({ transaction: payment_reference, amount: Number(intent.expected_total_kobo) / 100, customer_note: 'Bixcart could not complete your order after payment.', merchant_note: `Bixcart automatic full refund for checkout ${intent._id}: ${creationError.message}` }).catch(() => {});
-      await Order.deleteMany({ _id: { $in: orders?.map(o => o._id) || [] } }).catch(() => {});
-      await Listing.updateMany({ _id: { $in: listingIds } }, { $set: { status: 'active' } }).catch(() => {});
-      throw creationError;
-    }
-    await CartItem.deleteMany({ user_id: req.user.id, listing_id: { $in: listingIds } });
-    await User.findByIdAndUpdate(req.user.id, { $addToSet: { used_payment_refs: payment_reference } });
-    intent.used_at = new Date();
-    await intent.save();
-
-    for (const order of orders) {
-      const sellerId = String(order.seller_id);
-      const seller = await User.findById(sellerId).select('email full_name').lean();
-      const listing = await Listing.findById(order.listing_id).select('title delivery_window').lean();
-      await notifyUser(sellerId, { title: 'Payment received', body: 'A buyer has paid for your item. Please fulfil the order and share the delivery details.', type: 'escrow', url: `/pages/messages.html?conv=${order._id}` }).catch(() => {});
-      if (seller?.email) await sendOrderSellerAlertEmail(seller.email, { buyerName: req.user.full_name || 'A buyer', listingTitle: listing?.title || 'your item', orderId: String(order._id), deliveryWindow: listing?.delivery_window || '1d' }).catch(() => {});
-    }
-
-    res.json({ checkout_group, order_count: orders.length, total: orders.reduce((sum, o) => sum + o.amount, 0), orders: orders.map(o => ({ ...o.toObject(), id: o._id })) });
+    const result = await finalizeCheckoutPayment({ payment_reference, buyerId: req.user.id });
+    res.json(result);
   } catch (e) {
     console.error('[checkout] Exception:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(400).json({ error: e.message || 'Could not finalize payment' });
   }
 });
+
+router.finalizeCheckoutPayment = finalizeCheckoutPayment;
 
 // PUT /api/orders/:id/status
 router.put('/:id/status', authMiddleware, async (req, res) => {
@@ -450,10 +521,10 @@ router.put('/:id/status', authMiddleware, async (req, res) => {
       const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
       const listing = await Listing.findById(order.listing_id).select('title').lean();
       await notifyUser(String(order.buyer_id), {
-        title: refund.initiated ? 'Refund initiated' : 'Order cancelled',
+        title: refund.initiated ? 'Refund initiated' : 'Refund processing',
         body: refund.initiated
           ? `Your payment for ${listing?.title || 'this order'} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.`
-          : `Your order for ${listing?.title || 'this item'} was cancelled.`,
+          : `Your order for ${listing?.title || 'this item'} has been cancelled. Your refund is being processed and will be returned through the original payment method.`,
         type: 'refund',
         url: `/pages/orders.html?id=${order._id}`,
       }).catch(() => {});
@@ -638,7 +709,7 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
       return res.json({ success: true, escrow_status: 'released', payout_amount: payoutAmount, payout_status: order.payout_status, payout_reference: order.payout_reference, order: { ...order.toObject(), id: order._id } });
     }
 
-    const transferReference = `bixpayout_${String(order._id)}_${Date.now()}`;
+    const transferReference = `bixpayout_${String(order._id)}`;
     let transfer;
     try {
       transfer = await initiateTransfer({
@@ -650,10 +721,24 @@ router.post('/:id/confirm-delivery', authMiddleware, async (req, res) => {
         currency: 'NGN',
       });
     } catch (transferError) {
+      // Keep the customer-facing message safe, but preserve the exact Paystack
+      // response in server logs/database so payout failures can actually be diagnosed.
+      console.error('[escrow:payout] Paystack transfer failed', {
+        order_id: String(order._id),
+        reference: transferReference,
+        recipient: payoutSeller.payout_recipient_code,
+        amount_ngn: payoutAmount,
+        amount_kobo: Math.round(payoutAmount * 100),
+        message: transferError.message,
+        code: transferError.paystack_code || null,
+        http_status: transferError.paystack_http_status || null,
+        paystack_status: transferError.paystack_status ?? null,
+        paystack_data: transferError.paystack_data || null,
+      });
       order.payout_status = 'failed';
       order.payout_error = transferError.message || 'Seller payout could not be initiated';
       await order.save();
-      return res.status(502).json({ error: 'Escrow could not be released because the seller payout could not be initiated. The order remains protected.' });
+      return res.status(502).json({ error: 'We could not release the seller payout yet. The order remains protected. Please try again.' });
     }
 
     order.status = 'completed';
@@ -739,8 +824,10 @@ router.post('/:id/resolve', authMiddleware, async (req, res) => {
       const buyer = await User.findById(order.buyer_id).select('email full_name').lean();
       const listing = await Listing.findById(order.listing_id).select('title').lean();
       await notifyUser(String(order.buyer_id), {
-        title: 'Refund initiated',
-        body: `Your payment for ${listing?.title || 'this order'} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.`,
+        title: refund.initiated ? 'Refund initiated' : 'Refund processing',
+        body: refund.initiated
+          ? `Your payment for ${listing?.title || 'this order'} has been cancelled and a refund has been initiated. You will receive the funds back through the original payment method.`
+          : `Your order for ${listing?.title || 'this item'} has been cancelled. Your refund is being processed and will be returned through the original payment method.`,
         type: 'refund',
         url: `/pages/orders.html?id=${order._id}`,
       }).catch(() => {});

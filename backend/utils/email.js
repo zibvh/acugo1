@@ -125,8 +125,8 @@ async function sendOrderSellerAlertEmail(to, { buyerName, listingTitle, orderId,
 
 async function sendOrderRefundEmail(to, { buyerName, listingTitle, reason, amount, refundStatus = 'pending' }) {
   const statusText = refundStatus === 'processed'
-    ? 'Paystack has marked the refund as processed.'
-    : 'The refund has been initiated with Paystack and may take some time to reach your account.';
+    ? 'Your refund has been processed by Paystack and will be returned through the original payment method.'
+    : 'Your refund has been initiated and may take some time to reach your account.';
   await sendMail({
     to,
     subject: `Refund initiated for ${listingTitle}`,
