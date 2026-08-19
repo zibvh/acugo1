@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const express = require('express');
 const router  = express.Router();
-const { User, Listing, Conversation, Message, Order, ConversationReport, Broadcast, Hostel, AdminAction, UserActivity } = require('../db/database');
+const { User, Listing, Conversation, Message, Order, ConversationReport, UserReport, Broadcast, Hostel, AdminAction, UserActivity } = require('../db/database');
 const { adminMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { sendSellerDecisionEmail } = require('../utils/email');
@@ -274,6 +274,67 @@ router.post('/users/:id/message', async (req, res) => {
 });
 router.delete('/users/:id', async (req, res) => {
   return res.status(410).json({ error: 'Direct account deletion is disabled. Users must request deletion and an admin must approve it.' });
+});
+
+
+// ── USER PROFILE REPORTS ─────────────────────────────────────────────────────
+router.get('/user-reports', async (req, res) => {
+  try {
+    const status = ['pending','resolved','dismissed','all'].includes(req.query.status) ? req.query.status : 'pending';
+    const filter = status === 'all' ? {} : { status };
+    const reports = await UserReport.find(filter)
+      .populate('reported_user_id', 'full_name email role rating rating_count report_count discoverability_score is_verified account_status')
+      .populate('reporter_id', 'full_name email role')
+      .populate('resolved_by', 'full_name')
+      .sort({ created_at: -1 }).limit(200).lean();
+    res.json({ reports: reports.map(r => ({ ...r, id: r._id })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/user-reports/:id/resolve', async (req, res) => {
+  try {
+    const { fault_confirmed, admin_note = '', action = 'none' } = req.body;
+    if (typeof fault_confirmed !== 'boolean') return res.status(400).json({ error: 'fault_confirmed must be true or false' });
+    const report = await UserReport.findById(req.params.id);
+    if (!report) return res.status(404).json({ error: 'User report not found' });
+    if (report.status !== 'pending') return res.status(409).json({ error: 'Report has already been resolved' });
+
+    const target = await User.findById(report.reported_user_id);
+    if (!target) return res.status(404).json({ error: 'Reported user no longer exists' });
+
+    report.status = fault_confirmed ? 'resolved' : 'dismissed';
+    report.fault_confirmed = fault_confirmed;
+    report.admin_note = String(admin_note || '').trim();
+    report.resolved_at = new Date();
+    report.resolved_by = req.user.id;
+    await report.save();
+
+    if (fault_confirmed) {
+      const penalty = target.role === 'seller' ? 10 : 0;
+      target.report_count = Number(target.report_count || 0) + 1;
+      if (target.role === 'seller') target.discoverability_score = Math.max(0, Number(target.discoverability_score ?? 100) - penalty);
+      await target.save();
+    }
+
+    if (action === 'warn') {
+      target.account_status = 'warned';
+      target.warn_reason = report.admin_note || 'A user report was upheld by an administrator.';
+      target.warned_at = new Date();
+      await target.save();
+    } else if (action === 'suspend') {
+      target.account_status = 'suspended';
+      target.suspend_reason = report.admin_note || 'A user report was upheld by an administrator.';
+      target.suspended_at = new Date();
+      await target.save();
+    }
+
+    await logAdminAction(req, fault_confirmed ? 'user_report_upheld' : 'user_report_dismissed', target, report.admin_note, {
+      report_id: String(report._id), action, fault_confirmed,
+      discoverability_score: target.discoverability_score,
+    });
+
+    res.json({ success: true, report: { ...report.toObject(), id: report._id }, user: { id: target._id, full_name: target.full_name, account_status: target.account_status, discoverability_score: target.discoverability_score, report_count: target.report_count } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── HOSTELS ──────────────────────────────────────────────────────────────────

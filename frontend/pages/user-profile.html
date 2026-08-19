@@ -151,6 +151,12 @@
     .listings-mini-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
     .profile-stat-num { font-size: 17px; }
   }
+
+  .profile-actions { display:flex; gap:8px; flex-wrap:wrap; margin:18px 0 0; }
+  .report-btn { color:#b91c1c; border-color:#fecaca; }
+  .report-modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .report-modal { width:min(460px,100%); background:var(--surface); border-radius:16px; padding:20px; box-shadow:0 20px 60px rgba(0,0,0,.2); }
+  .report-modal textarea { width:100%; min-height:110px; resize:vertical; }
 </style>
 </head>
 <body>
@@ -304,14 +310,15 @@
           ${reviews.map(r => {
             const reviewer = isSeller
               ? (r.buyer_id?.full_name || 'Anonymous')
-              : (r.listing_id?.title   || 'Item');
+              : (r.seller_id?.full_name || 'Anonymous');
             const reviewerInitials = reviewer.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-            const avatarSrc = r.buyer_id?.avatar_url;
-            const starsFilled = r.buyer_rating || 0;
+            const avatarSrc = isSeller ? r.buyer_id?.avatar_url : r.seller_id?.avatar_url;
+            const starsFilled = isSeller ? (r.buyer_rating || 0) : (r.seller_rating || 0);
             const starsHTML = Array.from({length:5}, (_,i) =>
               `<span class="review-star" style="color:${i<starsFilled?'#f59e0b':'#d1d5db'}">★</span>`
             ).join('');
-            const dateStr = r.buyer_rated_at ? new Date(r.buyer_rated_at).toLocaleDateString('en-NG',{month:'short',year:'numeric'}) : '';
+            const ratedAt = isSeller ? r.buyer_rated_at : r.seller_rated_at;
+            const dateStr = ratedAt ? new Date(ratedAt).toLocaleDateString('en-NG',{month:'short',year:'numeric'}) : '';
             return `
               <div class="review-card">
                 <div class="review-header">
@@ -326,7 +333,7 @@
                     </div>
                   </div>
                 </div>
-                ${r.buyer_review ? `<div class="review-text">${escHtml(r.buyer_review)}</div>` : ''}
+                ${(isSeller ? r.buyer_review : r.seller_review) ? `<div class="review-text">${escHtml(isSeller ? r.buyer_review : r.seller_review)}</div>` : ''}
               </div>`;
           }).join('')}
         </div>`;
@@ -387,19 +394,54 @@
 
     // Compose message CTA (only for logged-in users viewing someone else)
     const me = auth.getUser();
-    const messageCTA = auth.isLoggedIn() && me?.id !== userId && me?.id !== u.id
-      ? `<a href="messages.html" class="btn btn-primary btn-sm" style="display:inline-flex;align-items:center;gap:5px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          Message
-        </a>`
+    const viewingOther = auth.isLoggedIn() && me?.id !== userId && me?.id !== u.id;
+    const messageCTA = viewingOther
+      ? `<a href="messages.html" class="btn btn-primary btn-sm" style="display:inline-flex;align-items:center;gap:5px;">${icons.messageCircle || '💬'} Message</a>`
       : '';
-
+    const reportCTA = viewingOther
+      ? `<button class="btn btn-surface btn-sm report-btn" onclick="openUserReportModal('${u.id}')">⚑ Report user</button>`
+      : '';
     // Render the whole body
     document.getElementById('profile-body').innerHTML = `
-      ${messageCTA ? `<div style="margin:20px 0 0;display:flex;justify-content:flex-end;">${messageCTA}</div>` : ''}
+      ${(messageCTA || reportCTA) ? `<div class="profile-actions" style="justify-content:flex-end;">${messageCTA}${reportCTA}</div>` : ''}
       <div class="profile-stats-row">${statsHTML}</div>
       ${listingsHTML}
       ${reviewsHTML}`;
+  }
+
+  async function openUserReportModal(targetId) {
+    if (!auth.isLoggedIn()) { window.location.href = 'auth.html'; return; }
+    const backdrop = document.createElement('div');
+    backdrop.className = 'report-modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="report-modal" role="dialog" aria-modal="true">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
+          <h3 style="margin:0;">Report this user</h3>
+          <button class="btn btn-ghost btn-sm" id="report-close">✕</button>
+        </div>
+        <p style="font-size:13px;color:var(--ink-3);margin:0 0 12px;">Tell Bixcart why you are reporting this user. An admin will review the report.</p>
+        <textarea id="user-report-reason" class="form-input" maxlength=1000 placeholder="Reason for report..."></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+          <button class="btn btn-ghost btn-sm" id="report-cancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="report-submit">Submit report</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.querySelector('#report-close').onclick = close;
+    backdrop.querySelector('#report-cancel').onclick = close;
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+    backdrop.querySelector('#report-submit').onclick = async () => {
+      const btn = backdrop.querySelector('#report-submit');
+      const reason = backdrop.querySelector('#user-report-reason').value.trim();
+      if (!reason) { toast('Please provide a reason for the report.', 'error'); return; }
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      try {
+        await api.post(`/auth/users/${targetId}/report`, { reason });
+        close();
+        toast('Report submitted. An admin will review it.', 'success');
+      } catch (e) { btn.disabled = false; btn.textContent = 'Submit report'; toast(e.message, 'error'); }
+    };
   }
 
   function escHtml(s) {

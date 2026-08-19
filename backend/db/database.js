@@ -31,6 +31,8 @@ const userSchema = new mongoose.Schema({
   rating_count:    { type: Number, default: 0 },
   profile_health:   { type: Number, default: 100, min: 0, max: 100 },
   is_verified:     { type: Boolean, default: false },
+  report_count:    { type: Number, default: 0, min: 0 },
+  discoverability_score: { type: Number, default: 100, min: 0, max: 100 },
   listing_credits:  { type: Number, default: 1 },
   successful_sales_count: { type: Number, default: 0, min: 0 },
   commission_tier:  { type: Number, default: 1, min: 1, max: 4 },
@@ -184,6 +186,23 @@ const conversationReportSchema = new mongoose.Schema({
 
 conversationReportSchema.index({ conversation_id: 1 });
 conversationReportSchema.index({ status: 1 });
+
+// Reports submitted directly from a public user profile. Pending reports are
+// reviewed by admins; only reports where an admin finds the target at fault
+// affect seller discoverability.
+const userReportSchema = new mongoose.Schema({
+  reported_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reporter_id:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reason:           { type: String, required: true, trim: true },
+  status:           { type: String, enum: ['pending', 'resolved', 'dismissed'], default: 'pending' },
+  fault_confirmed:  { type: Boolean, default: false },
+  admin_note:       { type: String, default: '' },
+  resolved_at:      { type: Date, default: null },
+  resolved_by:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+}, { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } });
+
+userReportSchema.index({ reported_user_id: 1, status: 1 });
+userReportSchema.index({ reporter_id: 1, reported_user_id: 1, status: 1 });
 
 const orderSchema = new mongoose.Schema({
   listing_id:             { type: mongoose.Schema.Types.ObjectId, ref: 'Listing', required: true },
@@ -348,6 +367,7 @@ async function connectDb() {
 
 const AdminAction = mongoose.model('AdminAction', adminActionSchema);
 const UserActivity = mongoose.model('UserActivity', userActivitySchema);
+const UserReport = mongoose.model('UserReport', userReportSchema);
 
 module.exports = {
   connectDb,
@@ -360,6 +380,7 @@ module.exports = {
   Conversation,
   Message,
   ConversationReport,
+  UserReport,
   Order,
   Broadcast,
   CheckoutIntent,

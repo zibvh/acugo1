@@ -219,7 +219,7 @@ function productCardHTML(listing, saved = false) {
 
   const user = auth.getUser();
   const isOwnListing = user && String(user.id) === String(listing.seller_id);
-  const canAddToCart = listing.status === 'active' && !isOwnListing;
+  const canAddToCart = listing.status === 'active' && !isOwnListing && user?.role === 'buyer';
 
   const discount = listing.original_price && listing.original_price > listing.price
     ? Math.round((1 - listing.price / listing.original_price) * 100) : 0;
@@ -233,9 +233,7 @@ function productCardHTML(listing, saved = false) {
     <div class="product-card-img">
       ${imgContent}
       ${cornerBadge}
-      <button class="product-card-save ${saved ? 'saved' : ''}" data-id="${listing.id}" onclick="toggleSave(event,'${listing.id}',this)" title="${saved ? 'Unsave' : 'Save'}">
-        ${saved ? icons.heartFilled : icons.heart}
-      </button>
+      ${user?.role !== 'seller' ? `<button class="product-card-save ${saved ? 'saved' : ''}" data-id="${listing.id}" onclick="toggleSave(event,'${listing.id}',this)" title="${saved ? 'Unsave' : 'Save'}">${saved ? icons.heartFilled : icons.heart}</button>` : ''}
       ${canAddToCart ? `<button class="product-card-cart-btn ${isInCart(listing.id) ? 'in-cart' : ''}" data-id="${listing.id}" data-cart-listing-id="${listing.id}" data-cart-type="card" onclick="addToCart(event,'${listing.id}',this)" title="${isInCart(listing.id) ? 'In cart — view cart' : 'Add to cart'}">${isInCart(listing.id) ? icons.check : icons.shoppingBag}</button>` : ''}
       ${listing.status === 'sold' ? `<div style="position:absolute;inset:0;background:rgba(24,21,15,.5);display:flex;align-items:center;justify-content:center;"><span class="badge badge-ink" style="font-size:13px;padding:6px 14px;">Sold</span></div>` : ''}
     </div>
@@ -269,8 +267,8 @@ function renderNav(activePage = '') {
   const isBuyer = user?.role === 'buyer';
   const isSeller = user?.role === 'seller';
 
-  // Buyers see marketplace, sellers don't
-  const links = isSeller ? [] : [
+  // Sellers can browse the marketplace too, but seller accounts do not get buyer actions.
+  const links = [
     { href: '/pages/marketplace.html', label: 'Browse', icon: icons.search },
   ];
   if (isSeller) links.push({ href: '/pages/sell.html', label: 'Sell', icon: icons.plus });

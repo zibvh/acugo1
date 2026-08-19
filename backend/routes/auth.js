@@ -5,7 +5,7 @@ const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
 const crypto     = require('crypto');
 const rateLimit  = require('express-rate-limit');
-const { User, Order, Listing, Waitlist, Hostel, AdminAction } = require('../db/database');
+const { User, Order, Listing, Waitlist, Hostel, AdminAction, UserReport } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
 const { sendVerificationEmail, sendPasswordResetEmail, sendSellerApplicationEmail, sendSellerDecisionEmail } = require('../utils/email');
 const { notifyUser } = require('../db/push');
@@ -767,30 +767,61 @@ router.get('/users/:id/profile', async (req, res) => {
     }
     if (!mongoose.Types.ObjectId.isValid(profileId)) return res.status(400).json({ error: 'Invalid user profile ID' });
     const user = await User.findById(profileId)
-      .select('full_name avatar_url bio university role rating rating_count business_name hostel_name room_number shop_name shop_number delivery_info created_at account_status')
+      .select('full_name avatar_url bio university role rating rating_count business_name hostel_name room_number shop_name shop_number delivery_info created_at account_status is_verified report_count discoverability_score successful_sales_count')
       .lean();
     if (!user || user.account_status === 'suspended') return res.status(404).json({ error: 'User not found' });
 
     let extra = {};
     if (user.role === 'seller') {
       const listings = await Listing.find({ seller_id: user._id, status: { $ne: 'deleted' } })
-        .select('title images price category status views').sort({ created_at: -1 }).limit(12).lean();
+        .select('title images price category status views').sort({ created_at: -1 }).lean();
       const completedOrders = await Order.countDocuments({ seller_id: user._id, status: 'completed' });
       const reviews = await Order.find({ seller_id: user._id, buyer_rating: { $ne: null } })
         .populate('buyer_id', 'full_name avatar_url')
         .select('buyer_rating buyer_review buyer_rated_at buyer_id')
-        .sort({ buyer_rated_at: -1 }).limit(10).lean();
-      extra = { listings, completed_sales: completedOrders, reviews };
+        .sort({ buyer_rated_at: -1 }).limit(50).lean();
+      const totalRated = await Order.countDocuments({ seller_id: user._id, buyer_rating: { $ne: null } });
+      const highRated = await Order.countDocuments({ seller_id: user._id, buyer_rating: { $gte: 4 } });
+      const highRatingPercent = totalRated ? (highRated / totalRated) * 100 : 0;
+      const verified = completedOrders >= 100 && totalRated > 0 && highRatingPercent >= 95;
+      if (verified !== !!user.is_verified) await User.findByIdAndUpdate(user._id, { $set: { is_verified: verified } });
+      const reportCount = await UserReport.countDocuments({ reported_user_id: user._id, status: 'pending' });
+      extra = { listings, completed_sales: completedOrders, reviews, total_ratings: totalRated, high_rating_percent: Math.round(highRatingPercent * 10) / 10, is_verified: verified, report_count: reportCount };
     } else {
       const purchases = await Order.countDocuments({ buyer_id: user._id, status: 'completed' });
-      const reviews = await Order.find({ buyer_id: user._id, buyer_rating: { $ne: null } })
-        .populate('listing_id', 'title')
-        .select('buyer_rating buyer_review buyer_rated_at listing_id')
-        .sort({ buyer_rated_at: -1 }).limit(10).lean();
-      extra = { purchases, reviews };
+      const reviews = await Order.find({ buyer_id: user._id, seller_rating: { $ne: null } })
+        .populate('seller_id', 'full_name avatar_url')
+        .select('seller_rating seller_review seller_rated_at seller_id')
+        .sort({ seller_rated_at: -1 }).limit(50).lean();
+      const totalRated = await Order.countDocuments({ buyer_id: user._id, seller_rating: { $ne: null } });
+      const highRated = await Order.countDocuments({ buyer_id: user._id, seller_rating: { $gte: 4 } });
+      const highRatingPercent = totalRated ? (highRated / totalRated) * 100 : 0;
+      const verified = purchases >= 100 && totalRated > 0 && highRatingPercent >= 95;
+      if (verified !== !!user.is_verified) await User.findByIdAndUpdate(user._id, { $set: { is_verified: verified } });
+      const reportCount = await UserReport.countDocuments({ reported_user_id: user._id, status: 'pending' });
+      extra = { purchases, reviews, total_ratings: totalRated, high_rating_percent: Math.round(highRatingPercent * 10) / 10, is_verified: verified, report_count: reportCount };
     }
 
     res.json({ ...user, id: user._id, ...extra });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// POST /api/auth/users/:id/report — report a user from their public profile
+router.post('/users/:id/report', authMiddleware, async (req, res) => {
+  try {
+    const reporterId = req.user.id;
+    const targetId = String(req.params.id || '').trim();
+    const { reason } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(targetId)) return res.status(400).json({ error: 'Invalid user ID' });
+    if (String(reporterId) === targetId) return res.status(400).json({ error: 'You cannot report yourself' });
+    if (!reason?.trim()) return res.status(400).json({ error: 'A report reason is required' });
+    const target = await User.findById(targetId).select('full_name role account_status').lean();
+    if (!target || target.role === 'admin' || target.account_status === 'deleted') return res.status(404).json({ error: 'User not found' });
+    const existing = await UserReport.findOne({ reported_user_id: targetId, reporter_id: reporterId, status: 'pending' });
+    if (existing) return res.status(409).json({ error: 'You have already submitted a pending report for this user' });
+    const report = await UserReport.create({ reported_user_id: targetId, reporter_id: reporterId, reason: reason.trim() });
+    res.json({ success: true, report_id: report._id, message: 'Report submitted. An admin will review it.' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

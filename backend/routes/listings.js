@@ -98,7 +98,7 @@ router.get('/', optionalAuth, async (req, res) => {
       total = await Listing.countDocuments(filter);
       listings = await Listing
         .find(filter)
-        .populate('seller_id', 'full_name rating is_verified')
+        .populate('seller_id', 'full_name rating is_verified discoverability_score')
         .sort(sortMap[sort])
         .skip(skip).limit(parseInt(limit)).lean();
     } else {
@@ -109,11 +109,15 @@ router.get('/', optionalAuth, async (req, res) => {
       // more likely to surface earlier, not guaranteed to.
       const weekKey    = currentWeekKey();
       const preferred  = await getPreferredCategories(req.user?.id);
-      const all = await Listing.find(filter).populate('seller_id', 'full_name rating is_verified').lean();
+      const all = await Listing.find(filter).populate('seller_id', 'full_name rating is_verified discoverability_score').lean();
 
       const scored = all.map(l => {
         const base = stableHash(weekKey + l._id.toString());
-        const score = preferred.includes(l.category) ? base * 0.5 : base;
+        const categoryScore = preferred.includes(l.category) ? base * 0.5 : base;
+        // Admin-upheld seller reports reduce marketplace discoverability without
+        // automatically removing the seller's listings. 100 = normal visibility.
+        const discoverability = Math.max(0, Math.min(100, Number(l.seller_id?.discoverability_score ?? 100)));
+        const score = categoryScore * (0.55 + (discoverability / 100) * 0.45);
         return { l, score };
       });
       scored.sort((a, b) => a.score - b.score);
@@ -128,6 +132,7 @@ router.get('/', optionalAuth, async (req, res) => {
       seller_name:     l.seller_id?.full_name,
       seller_rating:   l.seller_id?.rating,
       seller_verified: l.seller_id?.is_verified,
+      seller_discoverability: l.seller_id?.discoverability_score ?? 100,
     }));
 
     res.json({ listings: enriched, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
@@ -154,6 +159,7 @@ router.get('/saved', authMiddleware, async (req, res) => {
           seller_name:     l.seller_id?.full_name,
           seller_rating:   l.seller_id?.rating,
           seller_verified: l.seller_id?.is_verified,
+      seller_discoverability: l.seller_id?.discoverability_score ?? 100,
           seller_id:       l.seller_id?._id || l.seller_id,
           is_saved:        true,
           is_expired:      false,

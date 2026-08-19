@@ -221,7 +221,7 @@
       </div>
     `) : '';
     const ctaButtons = isSeller ? `
-      <a href="sell.html?edit=${l.id}" class="btn btn-ghost w-full" style="display:flex;">${icons.edit} Edit listing</a>
+      <div class="notice notice-info" style="margin-top:10px;">You are viewing the marketplace as a seller. Buyer actions are disabled.</div>
     ` : (l.status !== 'active' ? `
       <button class="btn btn-surface w-full" disabled>${icons.package} ${l.status === 'sold' ? 'Item sold' : 'Not available'}</button>
     ` : `

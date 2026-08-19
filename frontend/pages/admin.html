@@ -717,6 +717,10 @@ body {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       Reports
     </button>
+    <button class="admin-nav-item" data-tab="user-reports">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+      User Reports
+    </button>
     <button class="admin-nav-item" data-tab="escrow">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V6l-8-4Z"/><path d="m9.5 12 1.5 1.5 3.5-4"/></svg>
       Escrow
@@ -813,7 +817,7 @@ api.patch = (path, body) => api.request('PATCH', path, body, true);
 function adminLogout() { adminAuth.clear(); window.location.replace('admin-login.html'); }
 
 // ── Tab routing ─────────────────────────────────────────────────────────────
-const TABS = { overview: 'Overview', 'seller-approvals': 'Seller Approvals', 'deletion-requests': 'Account Deletions', actions: 'Admin Actions', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
+const TABS = { overview: 'Overview', 'seller-approvals': 'Seller Approvals', 'deletion-requests': 'Account Deletions', actions: 'Admin Actions', users: 'Users', listings: 'Listings', broadcast: 'Broadcast', hostels: 'Hostels', messages: 'Conversation Reports', 'user-reports': 'User Reports', escrow: 'Escrow', flagged: 'AI Flagged' };
 let currentTab = 'overview';
 
 document.querySelectorAll('.admin-nav-item[data-tab]').forEach(btn => {
@@ -859,6 +863,7 @@ function switchTab(tab) {
   if (tab === 'broadcast') renderBroadcast();
   if (tab === 'hostels')   renderHostels();
   if (tab === 'messages')  renderMessages();
+  if (tab === 'user-reports') renderUserReports();
   if (tab === 'escrow')    renderEscrow();
   if (tab === 'flagged')   renderFlagged();
 }
@@ -1961,6 +1966,61 @@ function removeListingConfirm(id, title) {
       } catch(e) { toast(e.message, 'error'); }
     }
   });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// USER PROFILE REPORTS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderUserReports() {
+  const c = document.getElementById('admin-content');
+  c.innerHTML = `<div style="margin-bottom:18px;"><div class="section-kicker">Safety</div><h2 style="font-size:28px;">User profile reports</h2><p style="color:var(--ink-3);font-size:13px;margin-top:6px;">Review reports submitted from buyer and seller profiles. Upholding a seller report lowers their marketplace discoverability; you can also warn or suspend the account.</p></div><div id="user-report-list"></div>`;
+  await fetchUserReports('pending');
+}
+
+async function fetchUserReports(status = 'pending') {
+  const c = document.getElementById('user-report-list');
+  if (!c) return;
+  try {
+    const data = await api.get(`/admin/user-reports?status=${status}`);
+    const reports = data.reports || [];
+    c.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      ${['pending','resolved','dismissed','all'].map(s => `<button class="btn btn-${s===status?'primary':'surface'} btn-sm" data-ur-status="${s}">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}
+    </div>` + (reports.length ? reports.map(r => {
+      const u = r.reported_user_id || {};
+      const reporter = r.reporter_id || {};
+      return `<div class="card" style="padding:16px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div><strong>${escHtml(u.full_name || 'Unknown user')}</strong> <span class="badge badge-surface">${escHtml(u.role || '')}</span><div style="font-size:12px;color:var(--ink-3);margin-top:3px;">Reported by ${escHtml(reporter.full_name || 'Unknown')} · ${fmtTime(r.created_at)}</div></div>
+          <span class="report-badge ${r.status}">${r.status}</span>
+        </div>
+        <div style="margin-top:12px;padding:11px;background:var(--bg);border-radius:9px;font-size:13px;">${escHtml(r.reason)}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--ink-3);">
+          <span>Reports upheld: ${u.report_count || 0}</span><span>Discoverability: ${u.discoverability_score ?? 100}/100</span><span>Rating: ${u.rating ? Number(u.rating).toFixed(1) : '—'}</span>
+        </div>
+        ${r.status === 'pending' ? `<div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
+          <select class="form-input" data-ur-action="${r.id}" style="max-width:150px;"><option value="none">No account action</option><option value="warn">Warn user</option><option value="suspend">Suspend user</option></select>
+          <input class="form-input" data-ur-note="${r.id}" placeholder="Admin note / reason" style="flex:1;min-width:220px;">
+          <button class="btn btn-primary btn-sm" data-ur-uphold="${r.id}">Uphold report</button>
+          <button class="btn btn-surface btn-sm" data-ur-dismiss="${r.id}">Dismiss</button>
+        </div>` : `<div style="margin-top:10px;font-size:12px;color:var(--ink-3);">${r.fault_confirmed ? 'Report upheld.' : 'Report dismissed.'}${r.admin_note ? ' ' + escHtml(r.admin_note) : ''}</div>`}
+      </div>`;
+    }).join('') : `<div class="admin-empty">No ${status === 'all' ? '' : status + ' '}user reports.</div>`);
+
+    c.querySelectorAll('[data-ur-status]').forEach(b => b.onclick = () => fetchUserReports(b.dataset.urStatus));
+    c.querySelectorAll('[data-ur-uphold]').forEach(b => b.onclick = () => resolveUserReport(b.dataset.urUphold, true));
+    c.querySelectorAll('[data-ur-dismiss]').forEach(b => b.onclick = () => resolveUserReport(b.dataset.urDismiss, false));
+  } catch (e) { c.innerHTML = `<div class="admin-empty">${escHtml(e.message)}</div>`; }
+}
+
+async function resolveUserReport(id, upheld) {
+  const action = document.querySelector(`[data-ur-action="${id}"]`)?.value || 'none';
+  const note = document.querySelector(`[data-ur-note="${id}"]`)?.value?.trim() || '';
+  if (upheld && !note) { toast('Add an admin note/reason before upholding a report.', 'error'); return; }
+  try {
+    await api.post(`/admin/user-reports/${id}/resolve`, { fault_confirmed: upheld, admin_note: note, action });
+    toast(upheld ? 'Report upheld and user record updated.' : 'Report dismissed.', 'success');
+    await fetchUserReports('pending');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
