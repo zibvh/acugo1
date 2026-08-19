@@ -398,7 +398,7 @@ async function finalizeCheckoutPayment({ payment_reference, buyerId }) {
     for (const listingId of item.listing_ids) {
       const listing = listingMap.get(String(listingId));
       const amount = Number(listing.price || 0);
-      const deliveryMinutes = { '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '7d': 10080 }[listing.delivery_window || '1d'] || 1440;
+      const deliveryMinutes = { '5m': 5, '6h': 360, '12h': 720, '1d': 1440, '3d': 4320, '7d': 10080 }[listing.delivery_window || '1d'] || 1440;
       ordersToCreate.push({
         listing_id: listing._id, buyer_id: buyerId, seller_id: listing.seller_id, amount,
         status: 'paid', escrow_status: 'held', escrow_code: escrowCode,
@@ -617,7 +617,7 @@ router.post('/:id/accept', sellerApprovalMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'This order expired because the seller did not respond in time' });
 
     const listing = await Listing.findById(order.listing_id).select('delivery_window').lean();
-    const deliveryMinutes = { '6h': 6 * 60, '12h': 12 * 60, '1d': 24 * 60, '3d': 72 * 60, '7d': 7 * 24 * 60 }[listing?.delivery_window || '1d'] || 24 * 60;
+    const deliveryMinutes = { '5m': 5, '6h': 6 * 60, '12h': 12 * 60, '1d': 24 * 60, '3d': 72 * 60, '7d': 7 * 24 * 60 }[listing?.delivery_window || '1d'] || 24 * 60;
     order.status = 'confirmed';
     order.seller_accepted_at = new Date();
     order.delivery_deadline_at = new Date(Date.now() + 1000 * 60 * deliveryMinutes);

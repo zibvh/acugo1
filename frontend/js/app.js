@@ -116,7 +116,7 @@ function formatPrice(p) { return '₦' + parseFloat(p).toLocaleString('en-NG', {
 
 // Human-readable delivery window — '6h' -> '6 hours', etc.
 function windowLabel(w) {
-  const map = { '6h': '6 hours', '12h': '12 hours', '1d': '1 day', '3d': '3 days', '7d': '7 days' };
+  const map = { '5m': '5 minutes', '6h': '6 hours', '12h': '12 hours', '1d': '1 day', '3d': '3 days', '7d': '7 days' };
   return map[w] || w || '1 day';
 }
 

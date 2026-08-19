@@ -231,7 +231,7 @@ router.post('/', sellerApprovalMiddleware, async (req, res) => {
     const { title, description, price, original_price, category, condition, images, delivery_window } = req.body;
     if (!title || !description || !price || !category || !condition)
       return res.status(400).json({ error: 'Missing required fields' });
-    const allowedWindows = ['6h','12h','1d','3d','7d'];
+    const allowedWindows = ['5m','6h','12h','1d','3d','7d'];
     if (delivery_window && !allowedWindows.includes(delivery_window))
       return res.status(400).json({ error: 'Invalid delivery window' });
 
@@ -295,7 +295,7 @@ router.put('/:id', sellerApprovalMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'This listing has expired. Renew it before editing.' });
 
     const { title, description, price, original_price, category, condition, status, images, delivery_window } = req.body;
-    const allowedWindows = ['6h','12h','1d','3d','7d'];
+    const allowedWindows = ['5m','6h','12h','1d','3d','7d'];
     if (delivery_window && !allowedWindows.includes(delivery_window))
       return res.status(400).json({ error: 'Invalid delivery window' });
     if (Array.isArray(images) && images.length > 5)
