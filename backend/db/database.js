@@ -90,7 +90,7 @@ const listingSchema = new mongoose.Schema({
   category:        { type: String, required: true },
   condition:       { type: String, required: true, enum: ['New','Like New','Good','Fair'] },
   images:          { type: [String], default: [] },
-  delivery_window:  { type: String, default: '1d', enum: ['6h','12h','1d','3d','7d'] },
+  delivery_window:  { type: String, default: '1d', enum: ['5m','6h','12h','1d','3d','7d'] },
   status:          { type: String, default: 'active', enum: ['active','pending','sold','deleted','flagged'] },
   views:           { type: Number, default: 0 },
   saves:           { type: Number, default: 0 },
