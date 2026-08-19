@@ -234,8 +234,18 @@ router.post('/', authMiddleware, async (req, res) => {
 router.post('/initialize-payment', authMiddleware, async (req, res) => {
   try {
     const { delivery_address } = req.body;
-    if (!delivery_address?.full_name || !delivery_address?.phone || !delivery_address?.address)
-      return res.status(400).json({ error: 'Full name, phone, and delivery address are required' });
+    if (!delivery_address?.full_name || !delivery_address?.phone)
+      return res.status(400).json({ error: 'Full name and phone number are required' });
+
+    // Bixcart does not collect a separate delivery address at checkout.
+    // Delivery is coordinated from the buyer/seller campus location (hostel/shop)
+    // and, when necessary, through the order delivery chat.
+    const checkoutDelivery = {
+      full_name: String(delivery_address.full_name).trim(),
+      phone: String(delivery_address.phone).trim(),
+      campus: 'Ajayi Crowther University',
+      note: String(delivery_address.note || '').trim(),
+    };
 
     const cartItems = await CartItem.find({ user_id: req.user.id }).populate('listing_id');
     if (!cartItems.length) return res.status(400).json({ error: 'Your cart is empty' });
@@ -310,7 +320,7 @@ router.post('/initialize-payment', authMiddleware, async (req, res) => {
       reference,
       buyer_id: req.user.id,
       expected_total_kobo: totalKobo,
-      delivery_address,
+      delivery_address: checkoutDelivery,
       items: intentItems,
       expires_at: new Date(Date.now() + 30 * 60 * 1000),
     });

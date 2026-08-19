@@ -48,47 +48,90 @@ const auth = {
 };
 
 // ── CART ──
+const cartState = {
+  ids: new Set(),
+  count: 0,
+};
+
+function isInCart(listingId) {
+  return cartState.ids.has(String(listingId));
+}
+
+function updateCartBadge(count) {
+  cartState.count = Number(count) || 0;
+  const badge = document.getElementById('nav-cart-badge');
+  if (!badge) return;
+  if (cartState.count > 0) { badge.textContent = cartState.count > 99 ? '99+' : cartState.count; badge.style.display = 'flex'; }
+  else badge.style.display = 'none';
+}
+
+function syncCartButtons() {
+  document.querySelectorAll('[data-cart-listing-id]').forEach(btn => {
+    const id = btn.getAttribute('data-cart-listing-id');
+    const inCart = isInCart(id);
+    btn.classList.toggle('in-cart', inCart);
+    btn.title = inCart ? 'In cart — view cart' : 'Add to cart';
+    if (btn.dataset.cartType === 'card') {
+      btn.innerHTML = inCart ? icons.check : icons.shoppingBag;
+      btn.setAttribute('aria-label', inCart ? 'In cart' : 'Add to cart');
+    }
+  });
+}
+
+async function refreshCartState() {
+  if (!auth.isLoggedIn()) return;
+  try {
+    const items = await api.get('/cart');
+    cartState.ids = new Set((items || []).map(i => String(i.id || i.listing_id || i._id)));
+    updateCartBadge(items?.length || 0);
+    syncCartButtons();
+  } catch (e) {
+    // Keep the navigation usable if cart loading fails.
+  }
+}
+
 const cart = {
   async add(listingId) {
     const r = await api.post('/cart/add', { listing_id: listingId });
+    cartState.ids.add(String(listingId));
     updateCartBadge(r.count);
+    syncCartButtons();
     return r;
   },
   async remove(listingId) {
     const r = await api.delete(`/cart/${listingId}`);
+    cartState.ids.delete(String(listingId));
     updateCartBadge(r.count);
+    syncCartButtons();
     return r;
   },
   list()  { return api.get('/cart'); },
   async clear() {
     const r = await api.delete('/cart');
+    cartState.ids.clear();
     updateCartBadge(0);
+    syncCartButtons();
     return r;
   },
 };
 
-function updateCartBadge(count) {
-  const badge = document.getElementById('nav-cart-badge');
-  if (!badge) return;
-  if (count > 0) { badge.textContent = count > 99 ? '99+' : count; badge.style.display = 'flex'; }
-  else badge.style.display = 'none';
-}
-
 async function refreshCartBadge() {
-  if (!auth.isLoggedIn()) return;
-  try { const { count } = await api.get('/cart/count'); updateCartBadge(count); } catch {}
+  await refreshCartState();
 }
 
-// Quick add-to-cart, used from product cards and the listing page
+// Quick add-to-cart, used from product cards and the listing page.
+// Once an item is added, every visible instance of that listing updates.
 async function addToCart(e, id, btn) {
   if (e) e.stopPropagation();
   if (!auth.isLoggedIn()) { window.location.href = '/pages/auth.html'; return; }
+  if (isInCart(id)) { window.location.href = '/pages/cart.html'; return; }
   const original = btn?.innerHTML;
   try {
     if (btn) { btn.disabled = true; btn.innerHTML = icons.loader; }
     await cart.add(id);
     toast('Added to cart', 'success');
-    if (btn) { btn.innerHTML = icons.check; setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 1200); }
+    syncCartButtons();
+    if (btn) btn.disabled = false;
   } catch (err) {
     toast(err.message, 'error');
     if (btn) { btn.innerHTML = original; btn.disabled = false; }
@@ -193,7 +236,7 @@ function productCardHTML(listing, saved = false) {
       <button class="product-card-save ${saved ? 'saved' : ''}" data-id="${listing.id}" onclick="toggleSave(event,'${listing.id}',this)" title="${saved ? 'Unsave' : 'Save'}">
         ${saved ? icons.heartFilled : icons.heart}
       </button>
-      ${canAddToCart ? `<button class="product-card-cart-btn" data-id="${listing.id}" onclick="addToCart(event,'${listing.id}',this)" title="Add to cart">${icons.shoppingBag}</button>` : ''}
+      ${canAddToCart ? `<button class="product-card-cart-btn ${isInCart(listing.id) ? 'in-cart' : ''}" data-id="${listing.id}" data-cart-listing-id="${listing.id}" data-cart-type="card" onclick="addToCart(event,'${listing.id}',this)" title="${isInCart(listing.id) ? 'In cart — view cart' : 'Add to cart'}">${isInCart(listing.id) ? icons.check : icons.shoppingBag}</button>` : ''}
       ${listing.status === 'sold' ? `<div style="position:absolute;inset:0;background:rgba(24,21,15,.5);display:flex;align-items:center;justify-content:center;"><span class="badge badge-ink" style="font-size:13px;padding:6px 14px;">Sold</span></div>` : ''}
     </div>
     <div class="product-card-body">
@@ -240,7 +283,7 @@ function renderNav(activePage = '') {
 
   const authHTML = user ? `
     ${isBuyer ? `
-    <a href="/pages/cart.html" class="btn btn-surface btn-icon" title="Cart" id="nav-cart-btn" style="position:relative">
+    <a href="/pages/cart.html" class="btn btn-surface btn-icon" title="Cart" aria-label="Cart" id="nav-cart-btn" style="position:relative;display:inline-flex">
       ${icons.shoppingBag}
       <span id="nav-cart-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;align-items:center;justify-content:center;line-height:1;border:1.5px solid var(--bg);"></span>
     </a>` : ''}
@@ -330,6 +373,31 @@ function skeletonCard() {
 function renderFooter() {
   const el = document.querySelector('.footer');
   if (!el) return;
+
+  const user = auth.getUser();
+  const isBuyer = user?.role === 'buyer';
+  const isSeller = user?.role === 'seller';
+
+  const marketplaceLinks = isSeller ? `
+    <li><a href="/pages/sell.html">List an item</a></li>
+    <li><a href="/pages/seller-dashboard.html">My listings</a></li>
+  ` : `
+    <li><a href="/pages/marketplace.html">Browse listings</a></li>
+    <li><a href="/pages/marketplace.html?category=Textbooks">Textbooks</a></li>
+    <li><a href="/pages/marketplace.html?category=Electronics">Electronics</a></li>
+    <li><a href="/pages/cart.html">Cart</a></li>
+  `;
+
+  const accountLinks = isSeller ? `
+    <li><a href="/pages/seller-dashboard.html">Seller dashboard</a></li>
+    <li><a href="/pages/messages.html">Messages</a></li>
+    <li><a href="/pages/settings.html">Account settings</a></li>
+  ` : `
+    <li><a href="/pages/buyer-dashboard.html">My purchases</a></li>
+    <li><a href="/pages/messages.html">Messages</a></li>
+    <li><a href="/pages/settings.html">Account settings</a></li>
+  `;
+
   el.innerHTML = `
   <div class="container">
     <div class="footer-grid">
@@ -337,18 +405,12 @@ function renderFooter() {
         <div class="footer-brand-logo">Bix<span>cart</span></div>
         <p>The campus marketplace built for Ajayi Crowther University students. Buy, sell, connect.</p>
       </div>
-      <div class="footer-col"><h5>Marketplace</h5><ul>
-        <li><a href="/pages/marketplace.html">Browse listings</a></li>
-        <li><a href="/pages/sell.html">Sell an item</a></li>
-        <li><a href="/pages/marketplace.html?category=Textbooks">Textbooks</a></li>
-        <li><a href="/pages/marketplace.html?category=Electronics">Electronics</a></li>
+      <div class="footer-col"><h5>${isSeller ? 'Selling' : 'Marketplace'}</h5><ul>
+        ${marketplaceLinks}
       </ul></div>
       <div class="footer-col"><h5>Account</h5><ul>
-        <li><a href="/pages/buyer-dashboard.html">My purchases</a></li>
-        <li><a href="/pages/seller-dashboard.html">Seller dashboard</a></li>
-        <li><a href="/pages/messages.html">Messages</a></li>
-        <li><a href="/pages/settings.html">Account settings</a></li>
-        <li><a href="/pages/auth.html">Sign in</a></li>
+        ${accountLinks}
+        ${!user ? '<li><a href="/pages/auth.html">Sign in</a></li>' : ''}
       </ul></div>
       <div class="footer-col"><h5>Company</h5><ul>
         <li><a href="/pages/about.html">About Bixcart</a></li>

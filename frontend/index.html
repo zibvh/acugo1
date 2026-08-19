@@ -187,7 +187,7 @@
   <div class="container hero-inner">
     <h1 class="hero-h1">Everything ACU is<br>buying &amp; selling <em>right now.</em></h1>
     <p class="hero-sub">The marketplace built exclusively for ACU students — textbooks, electronics, furniture, and more from verified classmates.</p>
-    <div class="hero-search-wrap">
+    <div class="hero-search-wrap" id="buyer-home-search">
       <div class="search-bar-wrap">
         <span style="color:var(--ink-3);display:flex;" id="hero-search-icon"></span>
         <input class="search-bar-input" id="hero-search-input" type="text" placeholder="Search for textbooks, phones, furniture…" autocomplete="off">
@@ -195,6 +195,13 @@
       </div>
     </div>
     <div class="hero-chips" id="hero-chips"></div>
+    <div id="seller-home-panel" style="display:none;margin-top:24px;max-width:620px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+        <a href="pages/seller-dashboard.html" class="btn btn-xl" style="background:white;color:var(--accent);font-weight:700;">Manage my listings</a>
+        <a href="pages/sell.html" class="btn btn-xl" style="background:rgba(255,255,255,.15);color:white;border:1.5px solid rgba(255,255,255,.3);">List a new item</a>
+      </div>
+      <p style="margin:12px 0 0;color:rgba(255,255,255,.68);font-size:13px;">Manage your listings, orders, messages and seller account from your dashboard.</p>
+    </div>
     <a href="pages/sell.html" id="hero-sell-btn" style="display:inline-flex;align-items:center;gap:6px;margin-top:16px;font-size:13px;font-weight:600;color:rgba(255,255,255,.75);text-decoration:none;">Got something to sell? List it in under 2 minutes →</a>
   </div>
 </section>
@@ -213,7 +220,7 @@
 </div>
 
 <!-- CATEGORIES -->
-<section style="padding: 56px 0 40px;">
+<section id="buyer-categories-section" style="padding: 56px 0 40px;">
   <div class="container">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:32px;">
       <div>
@@ -241,7 +248,7 @@
 </section>
 
 <!-- RECOMMENDED FOR YOU -->
-<section style="padding: 20px 0 80px;">
+<section id="buyer-recommended-section" style="padding: 20px 0 80px;">
   <div class="container">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:32px;">
       <div>
@@ -272,7 +279,7 @@
 </section>
 
 <!-- CTA BAND -->
-<section class="cta-band">
+<section class="cta-band" id="buyer-cta-band">
   <div style="max-width:600px;">
     <h2>Ready to <em>save money</em> this semester?</h2>
     <p>Join thousands of students already buying and selling on Bixcart. Free forever.</p>
@@ -290,12 +297,36 @@
   renderNav();
   renderFooter();
 
-  // Hide "List an item" hero button for buyers (sellers-only action)
+  // Keep buyer-only and seller-only content separated on the home page.
   (function() {
     const u = auth.getUser();
-    if (u && u.role === 'buyer') {
-      const btn = document.getElementById('hero-sell-btn');
-      if (btn) btn.style.display = 'none';
+    const isBuyer = u?.role === 'buyer';
+    const isSeller = u?.role === 'seller';
+
+    const sellBtn = document.getElementById('hero-sell-btn');
+    const sellerPanel = document.getElementById('seller-home-panel');
+    const buyerSearch = document.getElementById('buyer-home-search');
+    const buyerChips = document.getElementById('hero-chips');
+    const buyerCategories = document.getElementById('buyer-categories-section');
+    const buyerDeals = document.getElementById('deals-section');
+    const buyerRecommended = document.getElementById('buyer-recommended-section');
+    const buyerCta = document.getElementById('buyer-cta-band');
+
+    if (isSeller) {
+      if (sellBtn) sellBtn.style.display = 'none';
+      if (sellerPanel) sellerPanel.style.display = '';
+      if (buyerSearch) buyerSearch.style.display = 'none';
+      if (buyerChips) buyerChips.style.display = 'none';
+      if (buyerCategories) buyerCategories.style.display = 'none';
+      if (buyerDeals) buyerDeals.style.display = 'none';
+      if (buyerRecommended) buyerRecommended.style.display = 'none';
+      if (buyerCta) buyerCta.style.display = 'none';
+    } else if (isBuyer) {
+      if (sellBtn) sellBtn.style.display = 'none';
+      if (sellerPanel) sellerPanel.style.display = 'none';
+    } else {
+      // Logged-out visitors can see the public marketplace experience.
+      if (sellerPanel) sellerPanel.style.display = 'none';
     }
   })();
 

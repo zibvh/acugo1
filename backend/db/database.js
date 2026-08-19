@@ -271,7 +271,7 @@ const checkoutIntentSchema = new mongoose.Schema({
   reference: { type: String, required: true, unique: true, index: true },
   buyer_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   expected_total_kobo: { type: Number, required: true },
-  delivery_address: { type: mongoose.Schema.Types.Mixed, required: true },
+  delivery_address: { type: mongoose.Schema.Types.Mixed, default: null },
   items: { type: [mongoose.Schema.Types.Mixed], required: true },
   expires_at: { type: Date, required: true },
   used_at: { type: Date, default: null },

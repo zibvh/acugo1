@@ -225,7 +225,7 @@
     ` : (l.status !== 'active' ? `
       <button class="btn btn-surface w-full" disabled>${icons.package} ${l.status === 'sold' ? 'Item sold' : 'Not available'}</button>
     ` : `
-      <button class="btn btn-accent btn-lg w-full" id="add-cart-btn" onclick="addToCartFromListing('${l.id}')">${icons.shoppingBag} Add to cart</button>
+      <button class="btn btn-accent btn-lg w-full" id="add-cart-btn" data-cart-listing-id="${l.id}" data-cart-type="listing" onclick="addToCartFromListing('${l.id}')">${isInCart(l.id) ? icons.check + ' In your cart — view cart' : icons.shoppingBag + ' Add to cart'}</button>
       ${!sameHostel ? `<button class="btn btn-surface w-full" id="contact-btn" onclick="openMsgModal()">${icons.messageCircle} ${sameHostelLabel}</button>` : ''}
     `);
 
@@ -396,6 +396,7 @@
     if (!auth.requireAuth()) return;
     const btn = document.getElementById('add-cart-btn');
     if (!btn) return;
+    if (isInCart(id)) { window.location.href = 'cart.html'; return; }
     const original = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = icons.loader;
@@ -403,8 +404,8 @@
       await cart.add(id);
       toast('Added to cart', 'success');
       btn.innerHTML = `${icons.check} In your cart — view cart`;
-      btn.onclick = () => window.location.href = 'cart.html';
       btn.disabled = false;
+      syncCartButtons();
     } catch (e) {
       toast(e.message, 'error');
       btn.innerHTML = original;

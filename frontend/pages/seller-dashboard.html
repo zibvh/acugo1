@@ -519,7 +519,7 @@
             ${groupCounts[o.checkout_group] > 1 ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;">Part of a ${groupCounts[o.checkout_group]}-item order</div>` : ''}
             ${o.delivery_address ? `
               <div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:flex-start;gap:4px;">
-                ${icons.truck} <span>${o.delivery_address.full_name} · ${o.delivery_address.phone}<br>${o.delivery_address.address}${o.delivery_address.campus ? ', ' + o.delivery_address.campus : ''}${o.delivery_address.note ? ` — "${o.delivery_address.note}"` : ''}</span>
+                ${icons.truck} <span>${o.delivery_address.full_name} · ${o.delivery_address.phone}<br>${o.delivery_address.campus || 'Ajayi Crowther University'}${o.delivery_address.note ? ` — "${o.delivery_address.note}"` : ''}</span>
               </div>` : ''}
             ${o.status === 'paid' ? `<div style="font-size:12px;color:#b45309;margin-top:6px;font-weight:600;">🔒 Payment secured in escrow — accept the order to get started.</div>` : ''}
             ${o.escrow_code && ['confirmed','fulfilled'].includes(o.status) ? `<div style="font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${icons.shield} Give the buyer this code at handoff: <strong style="color:var(--ink);letter-spacing:.12em;">${o.escrow_code}</strong></div>` : ''}
