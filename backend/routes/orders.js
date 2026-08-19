@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { Order, Listing, User, SavedListing, CartItem, CheckoutIntent, getSellerCommissionInfo } = require('../db/database');
+const { Order, Listing, User, Conversation, SavedListing, CartItem, CheckoutIntent, getSellerCommissionInfo } = require('../db/database');
 const { authMiddleware, sellerApprovalMiddleware } = require('../middleware/auth');
 const { notifyUser } = require('../db/push');
 const { generateVerificationCode, verifyEscrowCode } = require('../utils/escrow');
@@ -632,6 +632,68 @@ router.post('/:id/accept', sellerApprovalMiddleware, async (req, res) => {
 
     res.json({ success: true, order: { ...order.toObject(), id: order._id } });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/orders/:id/delivery-info
+// Seller uses this before handing over an order. If both parties are registered
+// at the same hostel, expose that fact; otherwise route them into an order-specific chat.
+router.get('/:id/delivery-info', sellerApprovalMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id).lean();
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (String(order.seller_id) !== String(req.user.id))
+      return res.status(403).json({ error: 'Only the seller can get delivery info' });
+    if (!['confirmed', 'fulfilled'].includes(order.status))
+      return res.status(400).json({ error: 'Accept the order before getting delivery info' });
+    if (order.escrow_status === 'released' || order.status === 'cancelled')
+      return res.status(400).json({ error: 'This order is no longer active' });
+    if (order.delivery_deadline_at && new Date(order.delivery_deadline_at) < new Date())
+      return res.status(400).json({ error: 'This order missed the delivery deadline and will be refunded automatically' });
+
+    const [seller, buyer, listing] = await Promise.all([
+      User.findById(order.seller_id).select('full_name seller_location_type hostel_name room_number shop_name shop_number shop_address delivery_info').lean(),
+      User.findById(order.buyer_id).select('full_name hostel_name room_number location').lean(),
+      Listing.findById(order.listing_id).select('title').lean(),
+    ]);
+    if (!seller || !buyer) return res.status(404).json({ error: 'Delivery participants could not be found' });
+
+    const sellerHostel = String(seller.hostel_name || '').trim().toLowerCase();
+    const buyerHostel = String(buyer.hostel_name || '').trim().toLowerCase();
+    const sameHostel = seller.seller_location_type === 'hostel' && !!sellerHostel && !!buyerHostel && sellerHostel === buyerHostel;
+
+    if (sameHostel) {
+      return res.json({
+        mode: 'same_hostel',
+        message: `You and ${buyer.full_name || 'the buyer'} are in the same hostel (${seller.hostel_name}).`,
+        seller: { name: seller.full_name, hostel: seller.hostel_name, room: seller.room_number || '', delivery_info: seller.delivery_info || '' },
+        buyer: { name: buyer.full_name, hostel: buyer.hostel_name, room: buyer.room_number || '' },
+        listing_title: listing?.title || '',
+      });
+    }
+
+    const pair = { listing_id: order.listing_id, buyer_id: order.buyer_id, seller_id: order.seller_id, txn_status: 'pending' };
+    let conversation = await Conversation.findOne(pair).sort({ last_message_at: -1 });
+    if (!conversation) conversation = await Conversation.create({ listing_id: order.listing_id, buyer_id: order.buyer_id, seller_id: order.seller_id, txn_status: 'pending' });
+
+    await notifyUser(String(order.buyer_id), {
+      title: 'Delivery chat opened',
+      body: 'The seller needs to arrange delivery with you. Open the chat to coordinate the handoff.',
+      type: 'message',
+      tag: `delivery-${order._id}`,
+      url: `/pages/messages.html?conv=${conversation._id}`,
+    }).catch(() => {});
+
+    return res.json({
+      mode: 'delivery_chat',
+      message: 'You and the buyer are not in the same hostel. Use the delivery chat to arrange a meeting point and handoff.',
+      conversation_id: conversation._id,
+      chat_url: `/pages/messages.html?conv=${conversation._id}`,
+      listing_title: listing?.title || '',
+    });
+  } catch (e) {
+    console.error('[delivery-info] error:', e);
+    res.status(500).json({ error: e.message || 'Could not get delivery info' });
+  }
 });
 
 // POST /api/orders/:id/mark-shipped

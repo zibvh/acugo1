@@ -532,7 +532,7 @@
             ${o.status === 'paid' ? `
               <button class="btn btn-primary btn-sm" onclick="acceptOrder('${o.id}')">${icons.check} Accept</button>
               <button class="btn btn-danger btn-sm" onclick="declineOrder('${o.id}')">Decline</button>` : ''}
-            ${o.status === 'confirmed' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${o.id}')">${icons.truck} Mark as shipped</button>` : ''}
+            ${o.status === 'confirmed' ? `<button class="btn btn-primary btn-sm" onclick="getDeliveryInfo('${o.id}')">${icons.truck} Get Delivery Info</button>` : ''}
             ${o.status === 'completed' ? `<span style="font-size:13px;color:#059669;font-weight:600;">${icons.check} Delivered</span>` : ''}
             ${o.status === 'cancelled' ? `<span style="font-size:13px;color:var(--ink-3);font-weight:600;">Cancelled</span>` : ''}
             ${o.buyer_rating ? `<span style="font-size:13px;color:#d69e2e;font-weight:600;">Rated ${'★'.repeat(o.buyer_rating)}</span>` : ''}
@@ -542,13 +542,27 @@
     }).join('');
   }
 
-  window.markDelivered = async (id) => {
+  window.getDeliveryInfo = async (id) => {
     try {
-      await api.post(`/orders/${id}/mark-shipped`);
-      toast('Order marked as shipped. Buyer can verify the code to release escrow.', 'success');
-      loadOrders();
+      const info = await api.get(`/orders/${id}/delivery-info`);
+      if (info.mode === 'same_hostel') {
+        const extra = info.seller?.delivery_info ? `\n\nDelivery info: ${info.seller.delivery_info}` : '';
+        const ready = confirm(`${info.message}\n\nBuyer: ${info.buyer?.name || 'Buyer'}\nRoom: ${info.buyer?.room || 'Not provided'}${extra}\n\nWhen you have handed the item to the buyer, click OK to mark the order as delivered/fulfilled. The buyer will then confirm the verification code.`);
+        if (ready) {
+          await api.post(`/orders/${id}/mark-shipped`);
+          toast('Delivery recorded. The buyer can now verify the delivery code.', 'success');
+          loadOrders();
+        }
+      } else if (info.mode === 'delivery_chat') {
+        if (confirm('You and the buyer are not in the same hostel. Open the delivery chat to arrange the handoff?')) {
+          window.location.href = info.chat_url;
+        }
+      }
     } catch (e) { toast(e.message, 'error'); }
   };
+
+  // Kept as a compatibility alias for any older UI code that may still call it.
+  window.markDelivered = window.getDeliveryInfo;
 
   window.acceptOrder = async (id) => {
     try {
